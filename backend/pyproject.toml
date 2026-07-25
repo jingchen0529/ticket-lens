@@ -1,0 +1,48 @@
+[project]
+name = "daxicrawler"
+version = "0.1.0"
+description = "大麦 / 猫眼演出数据采集：分策略浏览器爬虫 + 统一数据模型"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.49.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "typer>=0.15.0",
+    "rich>=13.9.0",
+    "httpx>=0.28.0",
+    "tenacity>=9.0.0",
+    "python-dateutil>=2.9.0",
+    "orjson>=3.10.0",
+    "pyyaml>=6.0.0",
+    "pillow>=10.0.0",
+    "numpy>=1.26.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "openpyxl>=3.1.0",
+    "chinesecalendar>=1.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[project.scripts]
+daxi = "app.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

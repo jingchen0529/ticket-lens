@@ -1,0 +1,244 @@
+name: Release All Platforms
+
+# 打 tag 时自动触发所有平台打包，并创建 GitHub Release
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install backend deps + PyInstaller
+        working-directory: backend
+        run: |
+          uv venv
+          uv pip install -e ".[dev]"
+          uv pip install pyinstaller
+
+      - name: Download Playwright Chromium
+        working-directory: backend
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}\backend\pw-browsers
+        run: uv run playwright install chromium
+
+      - name: Build backend exe
+        working-directory: backend/packaging
+        run: uv run pyinstaller daxi.spec --noconfirm
+
+      - name: Bundle Chromium
+        shell: pwsh
+        run: |
+          $src = "${{ github.workspace }}\backend\pw-browsers"
+          $dst = "${{ github.workspace }}\backend\packaging\dist\daxi\ms-playwright"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+
+      - name: Tauri build
+        working-directory: frontend
+        run: npx tauri build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: frontend/src-tauri/target/release/bundle/nsis/*.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install backend deps + PyInstaller
+        working-directory: backend
+        run: |
+          uv venv
+          uv pip install -e ".[dev]"
+          uv pip install pyinstaller
+
+      - name: Download Playwright Chromium
+        working-directory: backend
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/backend/pw-browsers
+        run: uv run playwright install chromium
+
+      - name: Build backend binary
+        working-directory: backend/packaging
+        run: uv run pyinstaller daxi.spec --noconfirm
+
+      - name: Bundle Chromium
+        run: |
+          mkdir -p backend/packaging/dist/daxi/ms-playwright
+          cp -r backend/pw-browsers/* backend/packaging/dist/daxi/ms-playwright/
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+
+      - name: Tauri build
+        working-directory: frontend
+        run: npm run tauri:build:macos
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: frontend/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install backend deps + PyInstaller
+        working-directory: backend
+        run: |
+          uv venv
+          uv pip install -e ".[dev]"
+          uv pip install pyinstaller
+
+      - name: Download Playwright Chromium
+        working-directory: backend
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/backend/pw-browsers
+        run: uv run playwright install chromium
+
+      - name: Build backend binary
+        working-directory: backend/packaging
+        run: uv run pyinstaller daxi.spec --noconfirm
+
+      - name: Bundle Chromium
+        run: |
+          mkdir -p backend/packaging/dist/daxi/ms-playwright
+          cp -r backend/pw-browsers/* backend/packaging/dist/daxi/ms-playwright/
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri
+
+      - name: Tauri build
+        working-directory: frontend
+        run: npm run tauri:build:linux
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-installers
+          path: |
+            frontend/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            frontend/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+
+  release:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure
+        run: ls -R artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/windows-installer/*.exe
+            artifacts/macos-installer/*.dmg
+            artifacts/linux-installers/*.deb
+            artifacts/linux-installers/*.AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

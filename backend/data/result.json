@@ -1,0 +1,22 @@
+{
+  "job": {
+    "sources": [
+      "damai"
+    ],
+    "cities": [
+      "天津"
+    ],
+    "keywords": [],
+    "max_pages": 3,
+    "enrich_detail": true
+  },
+  "started_at": "2026-07-25T14:47:47.147630",
+  "finished_at": "2026-07-25T14:50:04.916740",
+  "raw_count": 90,
+  "show_count": 90,
+  "by_source": {
+    "damai": 90
+  },
+  "errors": [],
+  "output_path": "/Users/zhangyang/dev/development/zhangyang/damai/backend/data"
+}

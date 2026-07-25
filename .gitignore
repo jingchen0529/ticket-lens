@@ -1,0 +1,65 @@
+# --- deps ---
+node_modules/
+
+# --- python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.DS_Store
+.env
+
+# --- local data (SQLite 固定库 + 运行产物) ---
+backend/data/runs/
+backend/data/cookies/
+backend/data/*.sqlite3
+*.sqlite3
+
+# --- crawl / debug artifacts (dumps, screenshots, browser profiles, captcha probes) ---
+backend/data/browser_profile*/
+backend/data/captcha_probe/
+backend/data/damai_search_pages/
+backend/data/*.png
+backend/data/*.txt
+backend/data/damai_*.json
+# keep merged crawl products
+!backend/data/damai_search_items_merged.json
+!backend/data/damai_search_items_p1-5.json
+
+# --- playwright ---
+playwright-report/
+test-results/
+
+# --- frontend (以后) ---
+frontend/node_modules/
+frontend/dist/
+
+# --- Tauri 打包产物 ---
+# Rust target 目录（包含所有编译产物和打包文件）
+frontend/src-tauri/target/
+
+# 各平台安装包（额外保险，防止意外放到其他位置）
+*.dmg
+*.app
+*.exe
+*.msi
+*.deb
+*.rpm
+*.AppImage
+*.pkg
+
+# --- backend 打包产物 ---
+backend/packaging/dist/
+backend/packaging/build/
+
+# --- editor backups ---
+*.bak
+*.swp
+*.swo
+*~

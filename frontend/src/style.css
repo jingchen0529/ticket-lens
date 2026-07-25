@@ -1,0 +1,310 @@
+/* 演出数据采集平台 - CC Switch 极简苹果桌面风格 (macOS Apple Native Desktop Design) */
+
+:root {
+  /* 主品牌色 (纯粉 #eb4f9a / 可配置) */
+  --primary: #eb4f9a;
+  --primary-hover: #d83b87;
+  --primary-light: #fde8f3;
+  --primary-border: #f9a8d4;
+
+  /* 基础背景色 - 苹果白/极浅紫灰 */
+  --bg-main: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-header: #ffffff;
+  
+  /* 核心文字 */
+  --text-main: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  
+  --border-light: #e2e8f0;
+  --border-card: #e2e8f0;
+
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-pill: 20px;
+
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, "PingFang SC", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body, html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-size: 13px;
+  color: var(--text-main);
+  background-color: var(--bg-main);
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* App 整体容器 */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background-color: #f8fafc;
+}
+
+/* 顶部 macOS Header - 白底精干 54px 高度 */
+.top-header {
+  height: 54px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  user-select: none;
+  z-index: 50;
+  flex-shrink: 0;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+
+.top-header .brand-area {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* macOS 红黄绿窗口按钮 */
+.macos-dots {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.macos-dots .mac-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+}
+.macos-dots .mac-dot.close { background-color: #ff5f56; border: 1px solid #e0443e; }
+.macos-dots .mac-dot.min { background-color: #ffbd2e; border: 1px solid #dea123; }
+.macos-dots .mac-dot.max { background-color: #27c93f; border: 1px solid #1aab29; }
+
+.top-header .brand-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--primary);
+  letter-spacing: -0.3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.top-header .brand-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  object-fit: cover;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+.top-header .project-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #f1f5f9;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #475569;
+  font-weight: 500;
+  border: 1px solid #e2e8f0;
+}
+
+/* 中间 CC Switch 同款胶囊Segmented Control */
+.segmented-control {
+  display: flex;
+  align-items: center;
+  background: #f1f5f9;
+  padding: 3.5px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  gap: 2px;
+}
+
+.segment-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 16px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+}
+
+.segment-btn:hover {
+  color: #0f172a;
+}
+
+.segment-btn.active {
+  background: #ffffff;
+  color: var(--primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.header-right-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.backend-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #f1f5f9;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 11.5px;
+  color: #475569;
+  font-weight: 500;
+  border: 1px solid #e2e8f0;
+}
+
+.backend-pill .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+}
+
+.btn-add-action {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #ffffff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 3px 10px var(--primary-shadow);
+  transition: all 0.2s;
+}
+.btn-add-action:hover {
+  transform: scale(1.06);
+  background: var(--primary-hover);
+}
+
+/* 主体内容区 (取消侧边栏全屏宽敞) */
+.main-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: #f8fafc;
+}
+
+.content-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 底端 状态栏 */
+.bottom-statusbar {
+  height: 24px;
+  background: #ffffff;
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.statusbar-left, .statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* CC Switch 款大卡片容器 */
+.cc-card {
+  background: #ffffff;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-card);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+  transition: all 0.2s ease;
+}
+
+.cc-card.active-ring {
+  border-color: var(--primary-border);
+  box-shadow: 0 4px 16px var(--primary-shadow);
+}
+
+/* 通用输入控件 */
+input[type="text"], input[type="password"], input[type="date"], input[type="number"], select {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #1e293b;
+  background-color: #fff;
+  outline: none;
+  transition: all 0.15s;
+}
+
+input:focus, select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-light);
+}
+
+button.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  height: 32px;
+  padding: 0 18px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-shadow: 0 2px 8px var(--primary-shadow);
+  transition: all 0.2s;
+}
+button.btn-primary:hover {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+}
