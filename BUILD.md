@@ -9,19 +9,28 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-推送 tag 后，GitHub Actions 会自动：
-1. 并行在 Windows、macOS、Linux 三个平台上打包
+推送 tag 后，`Release` workflow 会自动：
+1. 并行在 4 个 runner 上打包（见下表）
 2. 创建 GitHub Release
 3. 上传所有平台的安装包到 Release 页面
+
+| 产物 | runner | 安装包 |
+| --- | --- | --- |
+| windows-x86_64 | windows-latest | `.exe`（NSIS） |
+| macos-aarch64 | macos-14 | `.dmg` |
+| macos-x86_64 | macos-13 | `.dmg` |
+| linux-x86_64 | ubuntu-22.04 | `.deb` + `.AppImage` |
+
+产物统一命名成 `daxi-<tag>-<label>.<ext>`。
+
+> macOS 不打 universal 包：PyInstaller 后端是单架构的，universal 壳配单架构后端
+> 会在另一架构的机器上崩。所以 Intel / Apple Silicon 各出一个 dmg。
 
 下载地址：`https://github.com/jingchen0529/ticket-lens/releases`
 
 ### 方式二：手动触发打包
-访问 GitHub Actions 页面，选择对应的 workflow 手动运行：
-- `Build Windows Desktop` - 只打 Windows 包
-- `Build macOS Desktop` - 只打 macOS 包  
-- `Build Linux Desktop` - 只打 Linux 包
-- `Release All Platforms` - 打所有平台并发布
+GitHub Actions 页面手动运行 `Release`（`workflow_dispatch`）。手动触发只跑构建、
+产物留在 workflow artifacts 里，不创建 Release（创建 Release 只在 tag 推送时发生）。
 
 ## 💻 本地打包
 
@@ -40,7 +49,11 @@ cd frontend
 npm run tauri:build:macos
 ```
 - **输出位置**: `frontend/src-tauri/target/universal-apple-darwin/release/bundle/dmg/`
-- **产物**: `daxi_*.dmg` (通用二进制，支持 Intel 和 Apple Silicon)
+- **产物**: `daxi_*.dmg`
+
+> ⚠️ 这个 script 打的是 universal 壳，但 `backend/packaging/dist/daxi` 里的
+> PyInstaller 后端只有当前机器的架构。本地自用没问题，交付给另一种架构的机器会起不了后端。
+> 要交付就走 CI（tag 触发），CI 是每个架构各自原生打的。
 
 ### Windows 打包
 > ⚠️ 必须在 Windows 系统上执行
@@ -49,8 +62,8 @@ npm run tauri:build:macos
 cd frontend
 npm run tauri:build:windows
 ```
-- **输出位置**: `frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/`
-- **产物**: `daxi_*.msi`
+- **输出位置**: `frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`
+- **产物**: `daxi_*-setup.exe`
 
 ### Linux 打包
 > ⚠️ 必须在 Linux 系统上执行

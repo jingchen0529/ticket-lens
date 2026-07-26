@@ -22,12 +22,12 @@ struct Backend(Mutex<Option<Child>>);
 fn backend_exe(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     let resource_dir = app.path().resource_dir().ok()?;
     let exe_name = if cfg!(windows) { "daxi.exe" } else { "daxi" };
-    let candidate = resource_dir.join("daxi").join(exe_name);
-    if candidate.exists() {
-        Some(candidate)
-    } else {
-        None
-    }
+    // tauri.conf.json 把 backend/packaging/dist/daxi 映射到资源目录的 backend/。
+    // 兼容旧的 daxi/ 布局（手工 bundle 脚本产物）。
+    ["backend", "daxi"]
+        .iter()
+        .map(|sub| resource_dir.join(sub).join(exe_name))
+        .find(|p| p.exists())
 }
 
 /// 启动后端。dev 模式（无打包资源）下跳过：开发时手动 `daxi serve`。
