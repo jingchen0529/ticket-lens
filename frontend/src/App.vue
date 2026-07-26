@@ -83,7 +83,6 @@ watch(currentTab, (newTab, oldTab) => {
       <div class="brand-area">
         <!-- Title / Logo -->
         <div class="brand-title">
-          <img class="brand-logo" src="/logo.png" alt="logo" width="22" height="22" />
           <span>演出数据采集</span>
         </div>
       </div>
