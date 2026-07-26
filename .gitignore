@@ -20,6 +20,11 @@ backend/data/runs/
 backend/data/cookies/
 backend/data/*.sqlite3
 *.sqlite3
+# 运行产物快照 + 本地设置：属于开发机个人数据，不进版本控制、也不该随包发给用户
+backend/data/shows.json
+backend/data/raw_items.json
+backend/data/result.json
+backend/data/frontend_settings.yaml
 
 # --- crawl / debug artifacts (dumps, screenshots, browser profiles, captcha probes) ---
 backend/data/browser_profile*/
@@ -31,6 +36,9 @@ backend/data/damai_*.json
 # keep merged crawl products
 !backend/data/damai_search_items_merged.json
 !backend/data/damai_search_items_p1-5.json
+
+# --- 内部文档（交付清单 / 使用手册，不进仓库）---
+docs/
 
 # --- playwright ---
 playwright-report/
@@ -57,6 +65,9 @@ frontend/src-tauri/target/
 # --- backend 打包产物 ---
 backend/packaging/dist/
 backend/packaging/build/
+
+# --- Playwright 浏览器（构建时 `playwright install` 生成，勿入库）---
+backend/pw-browsers/
 
 # --- editor backups ---
 *.bak

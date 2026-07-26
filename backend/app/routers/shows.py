@@ -9,6 +9,7 @@ import urllib.parse
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
+from pydantic import BaseModel
 
 from app.core.config import load_config
 from app.repositories.show_repo import ShowQuery, ShowRepository
@@ -94,6 +95,52 @@ def get_show(show_id: str) -> dict:
     return _enrich(show)
 
 
+class ClearRequest(BaseModel):
+    """清除数据请求。scope 决定范围，与导出的三态语义对齐：
+
+    - all：整库清空（shows / raw_items / crawl_runs），保留城市预设与设置。
+    - selected：只删勾选的 ids（忽略筛选条件）。
+    - filtered：删全部匹配筛选条件的记录。
+    """
+
+    scope: str = "all"
+    ids: Optional[str] = None
+    source: Optional[str] = None
+    city: Optional[str] = None
+    category: Optional[str] = None
+    status: Optional[str] = None
+    perf_state: Optional[str] = None
+    keyword: Optional[str] = None
+
+
+@router.post("/data/clear")
+def clear_data(req: ClearRequest | None = None) -> dict:
+    """按范围清除采集数据。
+
+    保留预设城市与设置，只删采集产物，并回收磁盘空间。
+    用 POST 而非 DELETE：本地 CORS 只放开 GET/POST（见 main.py）。
+    不传 body 时默认整库清空，兼容旧前端调用。
+    """
+    repo = _repo()
+    req = req or ClearRequest()
+    if req.scope == "all":
+        deleted = repo.clear_data()
+        return {"success": True, "deleted": deleted}
+
+    if req.scope == "selected":
+        id_list = [i for i in req.ids.split(",") if i] if req.ids else None
+        if not id_list:
+            raise HTTPException(status_code=400, detail="未指定要清除的记录")
+        deleted = repo.delete_shows(ShowQuery(), ids=id_list)
+    else:  # filtered
+        q = ShowQuery(
+            source=req.source, city=req.city, category=req.category,
+            status=req.status, perf_state=req.perf_state, keyword=req.keyword,
+        )
+        deleted = repo.delete_shows(q)
+    return {"success": True, "deleted": deleted}
+
+
 @router.get("/export")
 def export(
     fmt: str = Query("csv", pattern="^(csv|xlsx)$"),
@@ -103,15 +150,18 @@ def export(
     status: Optional[str] = None,
     perf_state: Optional[str] = Query(None, pattern="^(upcoming|ongoing|done|cancelled)$"),
     keyword: Optional[str] = None,
+    ids: Optional[str] = None,
 ) -> Response:
     repo = _repo()
     if not repo.exists():
         raise HTTPException(status_code=404, detail="数据库不存在，请先运行采集")
+    # ids 非空（前端勾选导出）时只导这些行，忽略筛选条件
+    id_list = [i for i in ids.split(",") if i] if ids else None
     q = ShowQuery(
         source=source, city=city, category=category, status=status,
         perf_state=perf_state, keyword=keyword,
     )
-    shows = repo.iter_for_export(q)
+    shows = repo.iter_for_export(q, ids=id_list)
 
     if fmt == "csv":
         data = to_csv(shows)

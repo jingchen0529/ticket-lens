@@ -59,6 +59,14 @@ export const api = {
   getShow(id) {
     return request(`/shows/${encodeURIComponent(id)}`)
   },
+  // 清除采集数据。payload.scope 决定范围（与导出一致）：
+  //   all      整库清空（shows / raw_items / crawl_runs），保留城市预设与设置
+  //   selected 只删勾选的 ids（payload.ids 逗号分隔）
+  //   filtered 删全部匹配筛选条件的记录（keyword/source/city/category/perf_state）
+  // 不传 payload 时默认整库清空。
+  clearData(payload = {}) {
+    return request('/data/clear', { method: 'POST', body: JSON.stringify(payload) })
+  },
   // 导出下载地址。浏览器环境直接 window.open 交给浏览器下载；
   // Tauri WebView 不支持网页下载，页面侧需 fetch 此地址后经 dialog+fs 落盘。
   exportUrl(fmt, params = {}) {

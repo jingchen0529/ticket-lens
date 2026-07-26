@@ -2888,28 +2888,31 @@ async def _solve_fruit_slider_local(
                 None if offline is None else round(offline, 1),
                 len(samples),
             )
-            try:
-                dbg = Path("data/captcha_probe/fruit_live")
-                dbg.mkdir(parents=True, exist_ok=True)
-                (dbg / f"curve_round{round_i}.json").write_text(
-                    json.dumps(
-                        {
-                            "best": best,
-                            "offline": offline,
-                            "method": method,
-                            "target": None if active is None else active.target_name,
-                            "boxes": focus_boxes,
-                            "samples": [{"x": x, "s": round(s, 3)} for x, s in samples],
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    ),
-                    encoding="utf-8",
-                )
-                if template_bytes:
-                    (dbg / f"template_round{round_i}.jpg").write_bytes(template_bytes)
-            except Exception:  # noqa: BLE001
-                pass
+            # 调试落盘：只在 DAXI_CAPTCHA_PROBE=1 时写。交付版默认关闭，
+            # 否则每碰到一次水果验证码就往用户数据目录默写图片/JSON，永不清理。
+            if os.environ.get("DAXI_CAPTCHA_PROBE") == "1":
+                try:
+                    dbg = Path("data/captcha_probe/fruit_live")
+                    dbg.mkdir(parents=True, exist_ok=True)
+                    (dbg / f"curve_round{round_i}.json").write_text(
+                        json.dumps(
+                            {
+                                "best": best,
+                                "offline": offline,
+                                "method": method,
+                                "target": None if active is None else active.target_name,
+                                "boxes": focus_boxes,
+                                "samples": [{"x": x, "s": round(s, 3)} for x, s in samples],
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    if template_bytes:
+                        (dbg / f"template_round{round_i}.jpg").write_bytes(template_bytes)
+                except Exception:  # noqa: BLE001
+                    pass
 
             # 2) 一次性拟人拖动提交。失败会生成新题，旧坐标绝不复用。
             candidates: list[float] = [best]

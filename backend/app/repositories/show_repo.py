@@ -116,13 +116,104 @@ class ShowRepository:
             rows = conn.execute(sql, params).fetchall()
         return [orjson.loads(r["payload"]) for r in rows]
 
-    def iter_for_export(self, q: ShowQuery) -> list[dict[str, Any]]:
-        """导出用：不分页，取全部匹配记录。"""
+    def iter_for_export(
+        self, q: ShowQuery, ids: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """导出用：不分页。
+
+        - ids 非空时：只导出这些 id（前端勾选导出），忽略筛选条件。
+        - ids 为空/None 时：导出全部匹配筛选条件的记录。
+        """
+        if ids:
+            # 用占位符批量 IN 查询，保序：按前端勾选顺序返回
+            placeholders = ",".join("?" for _ in ids)
+            sql = f"SELECT id, payload FROM shows WHERE id IN ({placeholders})"
+            with self._connect() as conn:
+                rows = conn.execute(sql, list(ids)).fetchall()
+            by_id = {r["id"]: orjson.loads(r["payload"]) for r in rows}
+            return [by_id[i] for i in ids if i in by_id]
+
         where, params = self._build_where(q)
         sql = f"SELECT payload FROM shows{where} ORDER BY start_time ASC NULLS LAST"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [orjson.loads(r["payload"]) for r in rows]
+
+    def delete_shows(
+        self, q: ShowQuery, ids: list[str] | None = None
+    ) -> dict[str, int]:
+        """按范围删除演出（勾选的 ids 或筛选条件），并连带删除对应的 raw_items。
+
+        - ids 非空：只删这些 id（前端勾选清除），忽略筛选条件。
+        - ids 为空：删全部匹配筛选条件的记录。
+        crawl_runs 采集历史属全局记录、非单条演出产物，此处保留（整库清空走 clear_data）。
+        返回 {"shows": n, "raw_items": m}。库不存在时返回全 0。
+        """
+        counts = {"shows": 0, "raw_items": 0}
+        if not self._db_path.exists():
+            return counts
+        with self._get_db_conn_rw() as conn:
+            # 先定位目标演出的 (source, source_id)，用于连带清对应 raw_items
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                rows = conn.execute(
+                    f"SELECT source, source_id FROM shows WHERE id IN ({placeholders})",
+                    list(ids),
+                ).fetchall()
+                del_sql = f"DELETE FROM shows WHERE id IN ({placeholders})"
+                del_params: list[Any] = list(ids)
+            else:
+                where, params = self._build_where(q)
+                rows = conn.execute(
+                    f"SELECT source, source_id FROM shows{where}", params
+                ).fetchall()
+                del_sql = f"DELETE FROM shows{where}"
+                del_params = params
+            pairs = [(r["source"], r["source_id"]) for r in rows]
+            counts["shows"] = len(pairs)
+            conn.execute(del_sql, del_params)
+            # 连带删除对应 raw_items（按 source + source_id 匹配）
+            for source, source_id in pairs:
+                cur = conn.execute(
+                    "DELETE FROM raw_items WHERE source = ? AND source_id = ?",
+                    (source, source_id),
+                )
+                if cur.rowcount and cur.rowcount > 0:
+                    counts["raw_items"] += cur.rowcount
+            conn.commit()
+            # 释放已删除数据占用的磁盘空间
+            conn.execute("VACUUM")
+        return counts
+
+    def clear_data(self) -> dict[str, int]:
+        """清空采集数据：shows / raw_items / crawl_runs 三张表。
+
+        保留 cities 主表（预设城市）与设置，只删采集产物。
+        返回各表删除前的行数，供前端提示。库不存在时返回全 0。
+        """
+        counts = {"shows": 0, "raw_items": 0, "crawl_runs": 0}
+        if not self._db_path.exists():
+            return counts
+        with self._get_db_conn_rw() as conn:
+            for table in counts:
+                try:
+                    row = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
+                    counts[table] = int(row["n"])
+                    conn.execute(f"DELETE FROM {table}")
+                except sqlite3.OperationalError:
+                    # 表不存在（老库）时跳过
+                    pass
+            # 回收 autoincrement 计数，避免 id 无限增长
+            try:
+                conn.execute(
+                    "DELETE FROM sqlite_sequence WHERE name IN ('raw_items','crawl_runs')"
+                )
+            except sqlite3.OperationalError:
+                pass
+            conn.commit()
+            # 释放已删除数据占用的磁盘空间
+            conn.execute("VACUUM")
+        return counts
 
     def get_show(self, show_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:

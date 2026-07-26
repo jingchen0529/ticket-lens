@@ -401,6 +401,42 @@ function handleExportClick() {
   showExportModal.value = true
 }
 
+// 清除数据 Modal 控制
+const showClearModal = ref(false)
+const clearing = ref(false)
+
+async function executeClear(scope) {
+  showClearModal.value = false
+  clearing.value = true
+
+  // 与导出一致：selected 走勾选 ids，filtered 走当前筛选，all 整库清空
+  const payload = { scope }
+  if (scope === 'selected') {
+    payload.ids = selectedRowIds.value.join(',')
+  } else if (scope === 'filtered') {
+    if (filters.keyword.trim()) payload.keyword = filters.keyword.trim()
+    if (filters.source !== 'all') payload.source = filters.source
+    if (filters.city !== 'all') payload.city = filters.city
+    if (filters.category !== 'all') payload.category = filters.category
+    if (filters.status !== 'all') payload.perf_state = filters.status
+  }
+
+  try {
+    const res = await api.clearData(payload)
+    const d = res?.deleted || {}
+    const n = (d.shows || 0)
+    triggerToast(`已清除 ${n} 条演出数据`)
+    // 清空后刷新列表与筛选项
+    selectedRowIds.value = []
+    await fetchShows()
+    await loadFacets()
+  } catch (e) {
+    triggerToast(`清除失败：${e?.message || e}`, 'error')
+  } finally {
+    clearing.value = false
+  }
+}
+
 async function executeExport(scope) {
   showExportModal.value = false
   const selectedCount = selectedRowIds.value.length
@@ -568,6 +604,12 @@ defineExpose({ refresh, fetchShows, loadFacets })
         <button class="tool-btn export" @click="handleExportClick">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           导出
+        </button>
+
+        <!-- 3. 清除数据 按钮 -->
+        <button class="tool-btn danger" :disabled="clearing" @click="showClearModal = true">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          清除数据
         </button>
 
         <div class="filter-divider"></div>
@@ -837,6 +879,60 @@ defineExpose({ refresh, fetchShows, loadFacets })
               @click="executeExport('all')"
             >
               导出全部 {{ total }} 条
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 清除数据确认 Modal -->
+    <div class="modal-overlay" v-if="showClearModal" @click.self="showClearModal = false">
+      <div class="modal-card export-simple-modal">
+        <div class="modal-header">
+          <div class="header-left">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e5484d" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <h3>清除数据确认</h3>
+          </div>
+          <button class="close-btn" @click="showClearModal = false">✕</button>
+        </div>
+
+        <div class="export-simple-body">
+          <div class="export-single-text">
+            <template v-if="selectedRowIds.length > 0">
+              您当前勾选了 <strong class="count-pink">{{ selectedRowIds.length }}</strong> 条记录，包含筛选共 <strong class="count-blue">{{ total }}</strong> 条，请选择清除的范围：
+            </template>
+            <template v-else>
+              符合当前筛选条件的演出数据共 <strong class="count-blue">{{ total }}</strong> 条，请选择清除的范围：
+            </template>
+            <br /><br />
+            清除会连带删除对应的原始记录，此操作不可撤销、清除后需重新采集。城市预设和系统设置会保留。
+          </div>
+        </div>
+
+        <div class="modal-footer simple-footer">
+          <button class="btn-cancel" @click="showClearModal = false">取消</button>
+          <div class="right-btn-group">
+            <button
+              v-if="selectedRowIds.length > 0"
+              class="btn-export-action danger"
+              :disabled="clearing"
+              @click="executeClear('selected')"
+            >
+              清除勾选的 {{ selectedRowIds.length }} 条
+            </button>
+            <button
+              class="btn-export-action danger-outline"
+              :disabled="clearing"
+              @click="executeClear('filtered')"
+            >
+              清除筛选的 {{ total }} 条
+            </button>
+            <button
+              class="btn-export-action danger-outline"
+              :disabled="clearing"
+              @click="executeClear('all')"
+            >
+              清除全部
             </button>
           </div>
         </div>
@@ -1360,6 +1456,19 @@ defineExpose({ refresh, fetchShows, loadFacets })
   background: var(--primary-light);
   border-color: var(--primary-border);
   color: var(--primary);
+}
+.tool-btn.danger {
+  color: #e5484d;
+  border-color: #f3c7c8;
+}
+.tool-btn.danger:hover {
+  background: #fef2f2;
+  border-color: #e5484d;
+  color: #c93a3e;
+}
+.tool-btn.danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Wide Data Grid Card */
@@ -1927,5 +2036,33 @@ defineExpose({ refresh, fetchShows, loadFacets })
   border-color: #3b82f6;
   color: #2563eb;
   background: #eff6ff;
+}
+
+.btn-export-action.danger {
+  background: #e5484d;
+  color: #ffffff;
+  border: none;
+  box-shadow: 0 2px 6px rgba(229, 72, 77, 0.3);
+}
+.btn-export-action.danger:hover {
+  background: #c93a3e;
+}
+.btn-export-action.danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-export-action.danger-outline {
+  background: #ffffff;
+  border: 1px solid #f1b5b7;
+  color: #c93a3e;
+}
+.btn-export-action.danger-outline:hover {
+  border-color: #e5484d;
+  background: #fef2f2;
+}
+.btn-export-action.danger-outline:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>

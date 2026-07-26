@@ -85,6 +85,15 @@ class SqliteStorage(Storage):
             )
             for i in items
         ]
+        # 去重：raw_items 原来是纯 INSERT，每次采集无脑追加，同一 (source, source_id)
+        # 会重复堆积、库无限膨胀。改为「先删同键旧行再插」，与 shows 的 upsert 口径一致。
+        # source_id 为空的条目无法判重，保持原样直接插入。
+        keyed = [(s, sid) for s, sid, *_ in rows if sid]
+        if keyed:
+            self._conn.executemany(
+                "DELETE FROM raw_items WHERE source = ? AND source_id = ?",
+                keyed,
+            )
         self._conn.executemany(
             "INSERT INTO raw_items (source, source_id, title, payload, crawled_at) VALUES (?,?,?,?,?)",
             rows,
