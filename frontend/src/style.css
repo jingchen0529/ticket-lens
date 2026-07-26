@@ -180,6 +180,33 @@ body, html {
   gap: 12px;
 }
 
+.update-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(255, 255, 255, 0.18);
+  padding: 5px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  color: #ffffff;
+  font-weight: 700;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.update-pill:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.update-pill .update-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.3);
+}
+
 .backend-pill {
   display: flex;
   align-items: center;

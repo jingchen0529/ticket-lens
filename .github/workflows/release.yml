@@ -147,12 +147,38 @@ jobs:
           workspaces: frontend/src-tauri
           key: ${{ matrix.label }}
 
+      # 把 tag 版本号写进 tauri.conf.json。否则安装包内建版本恒为 0.1.0，
+      # 装到客户机后每次都判定 latest.json 里的新版本更高 → 无限重复提示更新。
+      # 只在 tag 触发时改；手动 workflow_dispatch 保持原版本用于烟测。
+      - name: Stamp version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          conf="frontend/src-tauri/tauri.conf.json"
+          node -e "const fs=require('fs');const p='$conf';const j=JSON.parse(fs.readFileSync(p));j.version='$version';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
+          echo "stamped version: $version"
+          grep '"version"' "$conf"
+
       # tauri build 会顺带跑 npm run build（前端）并把 tauri.conf.json 的
       # resources（backend/packaging/dist/daxi）打进安装包。
+      # createUpdaterArtifacts=true 时会额外产出 updater 包（macOS .app.tar.gz /
+      # Windows -setup.exe）及对应 .sig —— 需要签名私钥才能生成 .sig。
       - name: Tauri build
         working-directory: frontend
+        env:
+          # 无密码密钥：只需私钥本身。密钥内容见项目记忆 ci-release-pipeline。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --target ${{ matrix.rust_target }} --bundles ${{ matrix.bundles }}
 
+      # 收集两类产物：
+      #   1) 面向人的安装包（dmg/exe/deb/AppImage）——客户手动下载安装那一次用。
+      #   2) updater 产物（macOS *.app.tar.gz / Windows *-setup.exe）及其 .sig ——
+      #      自动更新链路用，assemble-latest-json job 靠 .sig 组装 latest.json。
+      # updater 产物按平台/架构改名成带 LABEL 的稳定文件名，供 latest.json 里
+      # 的 URL 直接引用（GitHub Release 附件是扁平命名空间，名字必须全局唯一）。
       - name: Collect installers
         shell: bash
         env:
@@ -173,18 +199,40 @@ jobs:
             exit 1
           fi
 
+          # --- 1) 安装包（不含 updater 的 .tar.gz / -setup.exe，避免与下方重名冲突） ---
           found=0
           while IFS= read -r f; do
+            base="$(basename "$f")"
+            # nsis 的 -setup.exe 就是 Windows updater 产物，留给下面按 LABEL 收；
+            # 这里只收非 updater 安装包。
             ext="${f##*.}"
-            cp "$f" "$out/daxi-${version}-${LABEL}.${ext}"
-            echo "collected: daxi-${version}-${LABEL}.${ext}"
+            cp "$f" "$out/Daolue-${version}-${LABEL}.${ext}"
+            echo "collected installer: Daolue-${version}-${LABEL}.${ext}"
             found=$((found + 1))
           done < <(find "$bundle" -type f \
-            \( -name '*.dmg' -o -name '*.msi' -o -name '*.exe' \
+            \( -name '*.dmg' -o -name '*.msi' \
                -o -name '*.deb' -o -name '*.AppImage' -o -name '*.rpm' \) | sort)
 
+          # --- 2) updater 产物 + 签名 ---
+          # macOS: bundle/macos/*.app.tar.gz(.sig)
+          # Windows(nsis): bundle/nsis/*-setup.exe(.sig)
+          while IFS= read -r sig; do
+            art="${sig%.sig}"
+            # 扩展名不能用 ${art#*.}：版本号里有点（1.0.4）会被误切。
+            # 按已知后缀判定：macOS updater 是多段 .app.tar.gz，其余取最后一段。
+            case "$art" in
+              *.app.tar.gz) artext="app.tar.gz" ;;
+              *)            artext="${art##*.}" ;;
+            esac
+            newname="Daolue-${version}-${LABEL}.${artext}"
+            cp "$art" "$out/$newname"
+            cp "$sig" "$out/$newname.sig"
+            echo "collected updater: $newname (+ .sig)"
+            found=$((found + 1))
+          done < <(find "$bundle" -type f -name '*.sig' | sort)
+
           if [ "$found" -eq 0 ]; then
-            echo "::error::bundle 目录里没有任何安装包产物"
+            echo "::error::bundle 目录里没有任何产物"
             find "$bundle" -type f | head -50
             exit 1
           fi
@@ -219,23 +267,107 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: daxi ${{ github.ref_name }}
+          name: Daolue ${{ github.ref_name }}
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
           body: |
-            ## daxi ${{ github.ref_name }}
+            ## Daolue ${{ github.ref_name }}
 
             大麦/猫眼演出数据采集桌面客户端。
 
             ### 下载
 
-            - **Windows (x86_64)**: `daxi-${{ github.ref_name }}-windows-x86_64.exe`（安装版）
-            - **macOS (Apple Silicon)**: `daxi-${{ github.ref_name }}-macos-aarch64.dmg`
-            - **Linux (x86_64)**: `daxi-${{ github.ref_name }}-linux-x86_64.deb` / `.AppImage`
+            - **Windows (x86_64)**: `Daolue-${{ github.ref_name }}-windows-x86_64.exe`（安装版）
+            - **macOS (Apple Silicon)**: `Daolue-${{ github.ref_name }}-macos-aarch64.dmg`
+            - **Linux (x86_64)**: `Daolue-${{ github.ref_name }}-linux-x86_64.deb` / `.AppImage`
 
+            > 已安装过的用户无需手动下载：应用会自动检查并更新到此版本。
+            >
             > macOS 包未做 Apple 签名和公证，首次打开需右键 → 打开，或在
             > 「系统设置 → 隐私与安全性」中允许运行。
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 发版后组装 updater 用的 latest.json 并上传到同一 Release。
+  # 客户端 endpoint 指向 releases/latest/download/latest.json，据此判定新版本、
+  # 校验 .sig 签名后下载。缺了这个 job，自动更新就没有可拉取的清单。
+  assemble-latest-json:
+    name: Assemble latest.json
+    needs: publish
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p dl
+          gh release download "$TAG" --dir dl --repo "$GITHUB_REPOSITORY"
+          ls -la dl
+
+      - name: Generate latest.json
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          base_url="https://github.com/$REPO/releases/download/$TAG"
+
+          mac_url=""; mac_sig=""
+          win_url=""; win_sig=""
+          shopt -s nullglob
+          for sig in dl/*.sig; do
+            base=${sig%.sig}
+            fname=$(basename "$base")
+            url="$base_url/$fname"
+            sig_content=$(cat "$sig")
+            case "$fname" in
+              *macos-aarch64.app.tar.gz) mac_url="$url"; mac_sig="$sig_content" ;;
+              *windows-x86_64.exe)       win_url="$url"; win_sig="$sig_content" ;;
+            esac
+          done
+
+          tmp_json=$(mktemp)
+          {
+            echo '{'
+            echo "  \"version\": \"$VERSION\","
+            echo "  \"notes\": \"Release $TAG\","
+            echo "  \"pub_date\": \"$PUB_DATE\","
+            echo '  "platforms": {'
+            first=1
+            if [ -n "$mac_url" ] && [ -n "$mac_sig" ]; then
+              [ $first -eq 0 ] && echo ','
+              printf '    "darwin-aarch64": {"signature": "%s", "url": "%s"}' "$mac_sig" "$mac_url"
+              first=0
+            fi
+            if [ -n "$win_url" ] && [ -n "$win_sig" ]; then
+              [ $first -eq 0 ] && echo ','
+              printf '    "windows-x86_64": {"signature": "%s", "url": "%s"}' "$win_sig" "$win_url"
+              first=0
+            fi
+            echo ''
+            echo '  }'
+            echo '}'
+          } > "$tmp_json"
+          echo "Generated latest.json:" && cat "$tmp_json"
+          # 至少要有一个平台，否则客户端拉到空清单
+          if [ "$first" -eq 1 ]; then
+            echo "::error::latest.json 没有任何平台条目——updater 产物或 .sig 缺失"
+            exit 1
+          fi
+          mv "$tmp_json" latest.json
+
+      - name: Upload latest.json to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          gh release upload "$GITHUB_REF_NAME" latest.json --clobber --repo "$GITHUB_REPOSITORY"

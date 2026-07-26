@@ -8,6 +8,8 @@
     "dialog:allow-save",
     "fs:allow-write-file",
     "http:default",
-    "shell:allow-open"
+    "shell:allow-open",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

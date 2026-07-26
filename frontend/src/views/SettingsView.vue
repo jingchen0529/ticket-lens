@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { api } from '../api.js'
+import { api, IN_TAURI } from '../api.js'
+import { checkForUpdate, downloadAndInstall } from '../updater.js'
 
 const props = defineProps({
   currentTheme: {
@@ -128,6 +129,49 @@ async function saveAllSettings() {
     triggerToast('保存失败: ' + e.message)
   } finally {
     isSaving.value = false
+  }
+}
+
+// ---- 自动更新 ----
+const IS_TAURI = IN_TAURI
+// idle | checking | available | downloading | uptodate | error
+const updateState = ref('idle')
+const updateVersion = ref('')
+const updateNotes = ref('')
+const updateProgress = ref(0)
+const updateError = ref('')
+let pendingUpdate = null
+
+async function handleCheckUpdate() {
+  if (updateState.value === 'checking' || updateState.value === 'downloading') return
+  updateState.value = 'checking'
+  updateError.value = ''
+  try {
+    const update = await checkForUpdate({ showError: true })
+    if (update) {
+      pendingUpdate = update
+      updateVersion.value = update.version || ''
+      updateNotes.value = update.body || ''
+      updateState.value = 'available'
+    } else {
+      updateState.value = 'uptodate'
+    }
+  } catch (e) {
+    updateState.value = 'error'
+    updateError.value = e.message || '检查更新失败'
+  }
+}
+
+async function handleInstallUpdate() {
+  if (!pendingUpdate || updateState.value === 'downloading') return
+  updateState.value = 'downloading'
+  updateProgress.value = 0
+  try {
+    // 完成后 relaunch()，此后代码不再执行
+    await downloadAndInstall(pendingUpdate, (p) => { updateProgress.value = p })
+  } catch (e) {
+    updateState.value = 'error'
+    updateError.value = e.message || '下载安装失败'
   }
 }
 
@@ -326,6 +370,64 @@ onMounted(async () => {
               @change="handleHexInputChange"
             />
           </div>
+        </div>
+      </div>
+
+      <!-- 4. 软件更新 (仅桌面客户端) -->
+      <div class="setting-block" v-if="IS_TAURI">
+        <div class="block-header">
+          <h3 class="block-title">软件更新</h3>
+          <p class="block-desc">检查并安装最新版本。发现新版本后可一键下载，安装完成会自动重启应用。</p>
+        </div>
+
+        <div class="update-card">
+          <div class="update-left">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+              <polyline points="21 3 21 9 15 9"/>
+            </svg>
+
+            <template v-if="updateState === 'checking'">
+              <span class="update-txt">正在检查更新…</span>
+            </template>
+            <template v-else-if="updateState === 'available'">
+              <span class="update-txt update-hl">发现新版本 v{{ updateVersion }}</span>
+            </template>
+            <template v-else-if="updateState === 'downloading'">
+              <span class="update-txt">下载中 {{ updateProgress }}%</span>
+            </template>
+            <template v-else-if="updateState === 'uptodate'">
+              <span class="update-txt">已是最新版本</span>
+            </template>
+            <template v-else-if="updateState === 'error'">
+              <span class="update-txt update-err">{{ updateError }}</span>
+            </template>
+            <template v-else>
+              <span class="update-txt">点击右侧按钮检查是否有新版本</span>
+            </template>
+          </div>
+
+          <button
+            v-if="updateState === 'available'"
+            type="button"
+            class="update-btn update-btn-primary"
+            @click="handleInstallUpdate"
+          >
+            立即更新并重启
+          </button>
+          <button
+            v-else
+            type="button"
+            class="update-btn"
+            :disabled="updateState === 'checking' || updateState === 'downloading'"
+            @click="handleCheckUpdate"
+          >
+            {{ updateState === 'checking' ? '检查中…' : '检查更新' }}
+          </button>
+        </div>
+
+        <div v-if="updateState === 'downloading'" class="update-progress-track">
+          <div class="update-progress-bar" :style="{ width: updateProgress + '%' }"></div>
         </div>
       </div>
 
@@ -535,6 +637,90 @@ onMounted(async () => {
 
 .icon-spin {
   animation: settings-spin 0.8s linear infinite;
+}
+
+/* 软件更新卡片 */
+.update-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 46px;
+  padding: 8px 8px 8px 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.update-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #64748b;
+  min-width: 0;
+}
+
+.update-txt {
+  font-size: 13px;
+  color: #475569;
+  font-weight: 500;
+}
+
+.update-hl {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.update-err {
+  color: #ef4444;
+}
+
+.update-btn {
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid var(--primary-border, #f0abca);
+  background: #ffffff;
+  color: var(--primary);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.update-btn:hover:not(:disabled) {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+.update-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.update-btn-primary {
+  background: var(--primary);
+  color: #ffffff;
+  border-color: var(--primary);
+}
+
+.update-btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+.update-progress-track {
+  margin-top: 10px;
+  height: 6px;
+  border-radius: 3px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.update-progress-bar {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width 0.2s ease;
 }
 
 @keyframes settings-spin {

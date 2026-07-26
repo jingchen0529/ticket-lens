@@ -1,0 +1,52 @@
+// Tauri 自动更新封装。
+//
+// 更新链路：CI 发版时用 minisign 私钥签名 updater 产物（macOS .tar.gz /
+// Windows .msi），并组装 latest.json 上传到 GitHub Release。客户端启动时
+// （及点「检查更新」时）拉 tauri.conf.json 里配置的 endpoint（指向
+// releases/latest/download/latest.json），比对版本号 + 校验签名 → 下载 → 重启。
+//
+// 教训（见项目记忆）：Tauri 插件 JS 绑定必须静态 import——本仓库 openExternalUrl
+// 就是把动态 import 改成静态 shellOpen 才修好的。这两个包在浏览器 dev 下也能安全
+// 加载（只是调用时无效），故顶部静态 import；所有调用仍只在 IN_TAURI 下发生。
+
+import { check } from '@tauri-apps/plugin-updater'
+import { relaunch } from '@tauri-apps/plugin-process'
+import { IN_TAURI } from './api.js'
+
+// 检查是否有新版本。返回 Update 对象（有更新）或 null（已是最新 / 非 Tauri）。
+// 静默失败返回 null，避免离线或 GitHub 不可达时打断使用；showError 打开时抛出。
+export async function checkForUpdate({ showError = false } = {}) {
+  if (!IN_TAURI) return null
+  try {
+    const update = await check()
+    if (update && update.available) return update
+    return null
+  } catch (e) {
+    if (showError) throw e
+    console.warn('[updater] 检查更新失败:', e)
+    return null
+  }
+}
+
+// 下载并安装更新，完成后重启应用。onProgress 收到 0-100 的整数（若能算出）。
+export async function downloadAndInstall(update, onProgress) {
+  let downloaded = 0
+  let contentLength = 0
+  await update.downloadAndInstall((event) => {
+    switch (event.event) {
+      case 'Started':
+        contentLength = event.data.contentLength || 0
+        break
+      case 'Progress':
+        downloaded += event.data.chunkLength || 0
+        if (onProgress && contentLength > 0) {
+          onProgress(Math.min(100, Math.round((downloaded / contentLength) * 100)))
+        }
+        break
+      case 'Finished':
+        if (onProgress) onProgress(100)
+        break
+    }
+  })
+  await relaunch()
+}

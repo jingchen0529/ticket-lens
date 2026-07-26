@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, watch } from 'vue'
 import { api } from './api'
+import { checkForUpdate } from './updater.js'
 import CrawlView from './views/CrawlView.vue'
 import ShowsView from './views/ShowsView.vue'
 import SettingsView from './views/SettingsView.vue'
@@ -10,6 +11,9 @@ const currentTab = ref('crawl')
 
 const health = ref(null)
 const healthError = ref('')
+
+// 启动自动检查到的新版本（仅提示，安装在设置页操作）
+const updateAvailableVersion = ref('')
 
 // 主题配色配置 (默认 #eb4f9a)
 const currentThemeColor = ref(localStorage.getItem('theme_color') || '#eb4f9a')
@@ -63,6 +67,12 @@ onMounted(() => {
   checkHealth()
   setInterval(checkHealth, 10000)
   handleThemeChange(currentThemeColor.value)
+  // 启动后静默检查更新（延后几秒，避开启动时的后端拉起与首屏渲染）。
+  // 只提示，不自动安装——安装由用户在设置页确认后触发。
+  setTimeout(async () => {
+    const update = await checkForUpdate()
+    if (update) updateAvailableVersion.value = update.version || ''
+  }, 4000)
 })
 
 // 标签页切换：设置→采集刷新冰拓；进入数据查询时重新拉库（v-show 不会 onMounted）
@@ -119,7 +129,15 @@ watch(currentTab, (newTab, oldTab) => {
 
       <!-- 右侧 Action 区域 -->
       <div class="header-right-actions">
-       
+        <button
+          v-if="updateAvailableVersion"
+          class="update-pill"
+          @click="currentTab = 'settings'"
+          title="前往系统设置更新"
+        >
+          <span class="update-dot"></span>
+          有新版本 v{{ updateAvailableVersion }}
+        </button>
       </div>
     </header>
 
