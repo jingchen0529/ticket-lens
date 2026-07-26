@@ -10,7 +10,7 @@ git push origin v1.0.0
 ```
 
 推送 tag 后，`Release` workflow 会自动：
-1. 并行在 4 个 runner 上打包（见下表）
+1. 并行在 3 个 runner 上打包（见下表）
 2. 创建 GitHub Release
 3. 上传所有平台的安装包到 Release 页面
 
@@ -18,13 +18,17 @@ git push origin v1.0.0
 | --- | --- | --- |
 | windows-x86_64 | windows-latest | `.exe`（NSIS） |
 | macos-aarch64 | macos-14 | `.dmg` |
-| macos-x86_64 | macos-13 | `.dmg` |
 | linux-x86_64 | ubuntu-22.04 | `.deb` + `.AppImage` |
 
 产物统一命名成 `daxi-<tag>-<label>.<ext>`。
 
 > macOS 不打 universal 包：PyInstaller 后端是单架构的，universal 壳配单架构后端
-> 会在另一架构的机器上崩。所以 Intel / Apple Silicon 各出一个 dmg。
+> 会在另一架构的机器上崩。所以只出 Apple Silicon 版 dmg。
+>
+> **不出 Intel Mac（macos-13）版**：v1.0.1 实测该 runner 排队 2.5 小时仍未分配，
+> 而 publish 依赖全部 matrix job 成功，一个 job 排队就会让整个 Release 发不出去。
+> 确实需要 Intel Mac 包时，在 macos-13 上手动跑一次构建，或把它加回 matrix 并接受
+> 排队风险（可考虑给该 job 单独设 timeout-minutes + continue-on-error）。
 
 下载地址：`https://github.com/jingchen0529/ticket-lens/releases`
 

@@ -4,7 +4,7 @@ name: Release
 #
 # 关键约束（见 BUILD.md / 项目记忆）：
 # - PyInstaller 不能跨平台、也不能跨架构，所以每个目标平台/架构都要在对应 runner 上原生打后端。
-#   macOS 因此拆成 arm64(macos-14) 和 x86_64(macos-13) 两个 job，不用 universal 壳。
+#   macOS 因此只出 arm64(macos-14) 原生包，不用 universal 壳（Intel 见 matrix 注释）。
 # - Playwright 的有头 Chromium 和无头 headless_shell 是两个不同二进制，两个都必须打进包。
 on:
   push:
@@ -34,10 +34,13 @@ jobs:
             os: macos-14
             rust_target: aarch64-apple-darwin
             bundles: dmg
-          - label: macos-x86_64
-            os: macos-13
-            rust_target: x86_64-apple-darwin
-            bundles: dmg
+          # Intel Mac（macos-13）暂时下掉：v1.0.1 时该 runner 排队 2.5 小时仍未分配，
+          # 把整条流水线和 Release 一起堵死。Apple Silicon 已是主流，需要 Intel 包时
+          # 再把下面三行放回 matrix 即可（构建本身是通的，只是拿不到机器）。
+          # - label: macos-x86_64
+          #   os: macos-13
+          #   rust_target: x86_64-apple-darwin
+          #   bundles: dmg
           # 不打 rpm：ubuntu runner 没有 rpmbuild，客户也只用 Win/Mac。
           - label: linux-x86_64
             os: ubuntu-22.04
@@ -229,7 +232,6 @@ jobs:
 
             - **Windows (x86_64)**: `daxi-${{ github.ref_name }}-windows-x86_64.exe`（安装版）
             - **macOS (Apple Silicon)**: `daxi-${{ github.ref_name }}-macos-aarch64.dmg`
-            - **macOS (Intel)**: `daxi-${{ github.ref_name }}-macos-x86_64.dmg`
             - **Linux (x86_64)**: `daxi-${{ github.ref_name }}-linux-x86_64.deb` / `.AppImage`
 
             > macOS 包未做 Apple 签名和公证，首次打开需右键 → 打开，或在
