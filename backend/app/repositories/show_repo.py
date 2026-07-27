@@ -43,6 +43,10 @@ _SORTABLE = {
 # cancelled 优先于时间判定；start_time 解析不出日期的记录不归入任何时间态。
 _PERF_STATE_TIME_OP = {"upcoming": ">", "ongoing": "=", "done": "<"}
 
+# 不对外展示的演出大类：这两类不属于台账口径，查询/导出/筛选项一律排除。
+# 库里仍保留原始记录，只是查询层过滤，改动可逆。
+_EXCLUDED_CATEGORIES = ("展览休闲", "体育")
+
 
 class ShowRepository:
     def __init__(self, db_path: str | Path) -> None:
@@ -89,6 +93,13 @@ class ShowRepository:
         if q.keyword:
             clauses.append("title LIKE ?")
             params.append(f"%{q.keyword}%")
+        # 排除不对外展示的大类（展览休闲 / 体育）；NULL 分类保留
+        if _EXCLUDED_CATEGORIES:
+            placeholders = ",".join("?" for _ in _EXCLUDED_CATEGORIES)
+            clauses.append(
+                f"(category IS NULL OR category NOT IN ({placeholders}))"
+            )
+            params.extend(_EXCLUDED_CATEGORIES)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         return where, params
 
@@ -255,6 +266,11 @@ class ShowRepository:
                     out[field] = [r["v"] for r in rows]
                 except Exception:
                     out[field] = []
+
+            # 分类下拉同样排除不对外的大类，与查询/导出口径一致
+            out["category"] = [
+                c for c in out["category"] if c not in _EXCLUDED_CATEGORIES
+            ]
 
             # 核心：从数据库 cities 表读取全量预设城市
             cities_list: list[str] = []

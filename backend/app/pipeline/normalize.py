@@ -258,6 +258,72 @@ def normalize_one(raw: RawShowItem) -> Show | None:
     return show
 
 
+# 演出时间合理年份区间：早于 2000 或远超当前年（如 dateutil 误解析出的
+# 0520 / 2820）一律视为无法可靠解析，拆分时按无效日期对待。
+_MIN_SHOW_YEAR = 2000
+
+
+def _year_upper_bound() -> int:
+    return datetime.now().year + 10
+
+
+def has_valid_show_date(dt: datetime | None) -> bool:
+    """场次时间是否为可靠日期（在合理年份区间内）。"""
+    if dt is None:
+        return False
+    return _MIN_SHOW_YEAR <= dt.year <= _year_upper_bound()
+
+
+def split_show_by_sessions(show: Show) -> list[Show]:
+    """按场次把一条演出拆成多条：每个有效日期的场次一条独立 Show。
+
+    口径（据用户确认）：
+    - 每个能可靠解析日期的场次 → 一条，id=`source:source_id:序号`
+      （序号按场次时间升序，从 1 开始）。同一天多场也各拆一条。
+    - 无法可靠解析日期的场次（含年份越界，如 0520/2820）直接跳过。
+    - 若整条演出的所有场次都无有效日期 → 保留 1 条兜底（id 补 `:1`，
+      start_time 置 None），避免整条演出被丢弃。
+    - 每条只保留自身那一个场次，start_time / end_time / price / status
+      按该场次重算，其余字段沿用父记录。
+    """
+    valid_sessions = [s for s in show.sessions if has_valid_show_date(s.start_time)]
+    valid_sessions.sort(key=lambda s: s.start_time)  # type: ignore[arg-type,return-value]
+
+    if not valid_sessions:
+        # 全部场次都无有效日期：保留一条兜底，并清掉不可靠的主时间
+        base = show.model_copy(deep=True)
+        base.id = f"{show.id}:1"
+        base.start_time = None
+        if isinstance(base.extras, dict):
+            base.extras = {**base.extras, "session_count": len(base.sessions)}
+        return [base]
+
+    out: list[Show] = []
+    for idx, sess in enumerate(valid_sessions, start=1):
+        part = show.model_copy(deep=True)
+        part.id = f"{show.id}:{idx}"
+        part.sessions = [sess.model_copy(deep=True)]
+        part.start_time = sess.start_time
+        part.end_time = sess.end_time
+        # 状态：场次状态优先，未知则沿用演出级状态
+        if sess.status != ShowStatus.UNKNOWN:
+            part.status = sess.status
+        # 价格：优先按该场次票档重算，无票档则沿用父记录价格
+        tier_prices = [float(t.price) for t in sess.ticket_tiers if t.price is not None]
+        if tier_prices:
+            part.price = build_price_range(
+                tier_prices=tier_prices, price_raw=show.price.raw
+            )
+        if isinstance(part.extras, dict):
+            part.extras = {
+                **part.extras,
+                "session_count": 1,
+                "ticket_tier_count": len(sess.ticket_tiers),
+            }
+        out.append(part)
+    return out
+
+
 def normalize_items(
     raw_items: list[RawShowItem],
     config: PipelineConfig | None = None,
@@ -280,7 +346,8 @@ def normalize_items(
         if cfg.drop_invalid and (not show.title or not show.source_id):
             dropped += 1
             continue
-        shows.append(show)
+        # 入库前按场次拆分：单日一条，多日多条
+        shows.extend(split_show_by_sessions(show))
 
     if cfg.dedupe:
         seen: set[str] = set()

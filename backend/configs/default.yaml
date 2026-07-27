@@ -15,11 +15,11 @@ captcha:
   fruit_scan_step: 5
   fruit_strategy: local_first
   manual_wait_seconds: 120
-  password: test123456
+  password: ''  # 在应用"系统设置"页面配置
   persist_cookies: true
   provider: bingtop
   soft_id: ''
-  username: zhangsan718
+  username: ''  # 在应用"系统设置"页面配置
 crawl:
   cities:
   - 北京

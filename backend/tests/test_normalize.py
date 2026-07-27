@@ -128,5 +128,106 @@ def test_normalize_dedupe():
     ]
     shows = normalize_items(raws)
     assert len(shows) == 2
+    # 拆分后无有效日期的兜底条 id 带 :1 后缀
     ids = {s.id for s in shows}
-    assert ids == {"maoyan:1", "damai:1"}
+    assert ids == {"maoyan:1:1", "damai:1:1"}
+
+
+def _raw_with_sessions(source_id: str, session_times: list[str], title: str = "拆分测试"):
+    return RawShowItem(
+        source=SourcePlatform.DAMAI,
+        source_id=source_id,
+        title=title,
+        sessions_raw=[
+            {"id": f"s{i}", "name": t, "start_time": t}
+            for i, t in enumerate(session_times, start=1)
+        ],
+    )
+
+
+def test_split_multi_day_into_multiple_rows():
+    """跨多日的演出按场次拆成多条，id 带序号且按时间升序。"""
+    raw = _raw_with_sessions(
+        "978489769120",
+        ["2026-07-28 15:00", "2026-07-26 15:00", "2026-07-27 11:00"],
+    )
+    shows = normalize_items([raw])
+    assert len(shows) == 3
+    # 序号按场次时间升序：最早的 07-26 是 :1
+    ids = [s.id for s in shows]
+    assert ids == [
+        "damai:978489769120:1",
+        "damai:978489769120:2",
+        "damai:978489769120:3",
+    ]
+    starts = [s.start_time.strftime("%Y-%m-%d") for s in shows]
+    assert starts == ["2026-07-26", "2026-07-27", "2026-07-28"]
+    # 每条只保留自身一个场次
+    assert all(len(s.sessions) == 1 for s in shows)
+
+
+def test_split_same_day_multiple_sessions_each_row():
+    """同一天多个场次也各拆一条（每场次一条）。"""
+    raw = _raw_with_sessions(
+        "950252691257",
+        ["2026-07-26 15:00", "2026-07-26 17:00", "2026-07-26 19:00"],
+    )
+    shows = normalize_items([raw])
+    assert len(shows) == 3
+    assert {s.id for s in shows} == {
+        "damai:950252691257:1",
+        "damai:950252691257:2",
+        "damai:950252691257:3",
+    }
+    hours = sorted(s.start_time.hour for s in shows)
+    assert hours == [15, 17, 19]
+
+
+def test_split_skips_invalid_year_sessions():
+    """年份越界（如 0520/2820）的场次视为无效日期被跳过。"""
+    raw = _raw_with_sessions(
+        "844032523185",
+        ["0520-08-01 16:00", "2026-07-26 16:00", "2820-07-01 20:00"],
+    )
+    shows = normalize_items([raw])
+    # 只有 2026-07-26 那条有效
+    assert len(shows) == 1
+    assert shows[0].id == "damai:844032523185:1"
+    assert shows[0].start_time.year == 2026
+
+
+def test_split_all_invalid_dates_keeps_one_fallback():
+    """整条演出所有场次都无有效日期时保留一条兜底，start_time 置 None。"""
+    raw = _raw_with_sessions("999", ["0520-08-01 16:00", "2820-07-01 20:00"])
+    shows = normalize_items([raw])
+    assert len(shows) == 1
+    assert shows[0].id == "damai:999:1"
+    assert shows[0].start_time is None
+
+
+def test_split_recomputes_price_per_session():
+    """拆分后价格按各自场次的票档重算。"""
+    raw = RawShowItem(
+        source=SourcePlatform.DAMAI,
+        source_id="price-split",
+        title="分场价格",
+        sessions_raw=[
+            {
+                "id": "s1",
+                "name": "早场",
+                "start_time": "2026-08-01 15:00",
+                "ticket_tiers": [{"name": "A", "price": 80}, {"name": "B", "price": 180}],
+            },
+            {
+                "id": "s2",
+                "name": "晚场",
+                "start_time": "2026-08-02 19:30",
+                "ticket_tiers": [{"name": "C", "price": 280}, {"name": "D", "price": 580}],
+            },
+        ],
+    )
+    shows = normalize_items([raw])
+    assert len(shows) == 2
+    by_id = {s.id: s for s in shows}
+    assert by_id["damai:price-split:1"].price.raw == "80|180"
+    assert by_id["damai:price-split:2"].price.raw == "280|580"

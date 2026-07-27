@@ -1,4 +1,4 @@
-# --- deps ---
+11# --- deps ---
 node_modules/
 
 # --- python ---
@@ -16,29 +16,14 @@ build/
 .env
 
 # --- local data (SQLite 固定库 + 运行产物) ---
-backend/data/runs/
-backend/data/cookies/
-backend/data/*.sqlite3
-*.sqlite3
-# 运行产物快照 + 本地设置：属于开发机个人数据，不进版本控制、也不该随包发给用户
-backend/data/shows.json
-backend/data/raw_items.json
-backend/data/result.json
-backend/data/frontend_settings.yaml
-
-# --- crawl / debug artifacts (dumps, screenshots, browser profiles, captcha probes) ---
-backend/data/browser_profile*/
-backend/data/captcha_probe/
-backend/data/damai_search_pages/
-backend/data/*.png
-backend/data/*.txt
-backend/data/damai_*.json
-# keep merged crawl products
+backend/data/
+# 保留示例数据文件供测试
 !backend/data/damai_search_items_merged.json
 !backend/data/damai_search_items_p1-5.json
 
-# --- 内部文档（交付清单 / 使用手册，不进仓库）---
-docs/
+# --- 内部文档（仅排除客户敏感信息，架构文档保留）---
+docs/客户使用手册.md
+docs/交付清单.md
 
 # --- playwright ---
 playwright-report/

@@ -129,6 +129,15 @@ class SqliteStorage(Storage):
                     s.normalized_at.isoformat() if s.normalized_at else None,
                 )
             )
+        # 一条演出会按场次拆成多行（id = source:source_id:序号）。重采时若场次
+        # 变少，纯 upsert 会让旧的高序号拆分行残留成孤儿。改为先按本批出现的
+        # (source, source_id) 删掉该演出的所有旧拆分行，再整体重插。
+        keyed = {(s.source.value, s.source_id) for s in shows if s.source_id}
+        if keyed:
+            self._conn.executemany(
+                "DELETE FROM shows WHERE source = ? AND source_id = ?",
+                list(keyed),
+            )
         self._conn.executemany(
             """
             INSERT INTO shows (

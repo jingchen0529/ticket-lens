@@ -34,6 +34,30 @@ logger = logging.getLogger(__name__)
 SUBPAGE_BASE = "https://detail.damai.cn/subpage"
 ITEM_PAGE = "https://detail.damai.cn/item.htm"
 
+# 桌面 Chrome UA 兜底。大麦对 subpage / item.htm 会校验 UA：Playwright 的
+# context.request 是独立 HTTP 栈，默认 UA（APIRequest/…）或 headless 的
+# HeadlessChrome 会被判为非浏览器请求，直接返回裸 "error" 或空 body，导致
+# 95% 详情拉取失败、场次全丢。请求必须带一个正常浏览器 UA。
+_FALLBACK_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
+)
+
+
+async def _browser_ua(page: Page) -> str:
+    """取当前 page 的真实 UA；剥掉 Headless 标记，取不到则用桌面兜底。"""
+    try:
+        ua = await page.evaluate("() => navigator.userAgent")
+    except Exception:  # noqa: BLE001
+        ua = ""
+    ua = str(ua or "").strip()
+    if not ua:
+        return _FALLBACK_UA
+    # headless 的 "HeadlessChrome/…" 同样会被识别为非真人浏览器
+    return ua.replace("HeadlessChrome", "Chrome")
+
+
 # 详情介绍里常见「小节标题」
 _SECTION_TITLES = (
     "主办",
@@ -147,7 +171,11 @@ def _session_from_perform_view(pv: dict[str, Any], skus: list[dict[str, Any]] | 
     for sku in skus or []:
         if not isinstance(sku, dict):
             continue
-        price = _parse_price(sku.get("price") or sku.get("dashPrice"))
+        # 尝试多个价格字段；大麦不同接口版本字段名不同
+        price = _parse_price(
+            sku.get("price") or sku.get("salePrice") or sku.get("priceValue")
+            or sku.get("skuPrice") or sku.get("dashPrice")
+        )
         tiers.append(
             {
                 "sku_id": str(sku.get("skuId") or ""),
@@ -627,6 +655,7 @@ async def fetch_subpage(
     """
     url = _build_subpage_url(item_id, data_id=data_id, data_type=data_type)
     text = ""
+    ua = await _browser_ua(page)
     try:
         # context.request 继承 storage_state cookies
         req = page.context.request
@@ -637,6 +666,7 @@ async def fetch_subpage(
                 "accept": "*/*",
                 "referer": f"https://detail.damai.cn/item.htm?id={item_id}",
                 "x-requested-with": "XMLHttpRequest",
+                "user-agent": ua,
             },
         )
         if not resp.ok:
@@ -698,6 +728,7 @@ async def fetch_item_static(
 ) -> dict[str, Any]:
     """GET item.htm，解析 staticDataDefault（场馆地址 + 项目介绍）。"""
     url = f"{ITEM_PAGE}?id={item_id}"
+    ua = await _browser_ua(page)
     try:
         resp = await page.context.request.get(
             url,
@@ -705,6 +736,7 @@ async def fetch_item_static(
             headers={
                 "accept": "text/html,application/xhtml+xml",
                 "referer": "https://search.damai.cn/",
+                "user-agent": ua,
             },
         )
         if not resp.ok:

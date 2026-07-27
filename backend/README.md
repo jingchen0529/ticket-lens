@@ -129,10 +129,28 @@ python scripts/render_captcha_probe.py \
 ## 安装
 
 ```bash
-cd daxicrawler
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
+cd backend
+python3.11 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+# 使用 uv 从锁定文件安装(推荐)
+uv pip sync requirements-dev.lock
+
+# 或使用 pip
+pip install -r requirements-dev.lock
+
+# 安装浏览器
 playwright install chromium
+```
+
+**依赖管理**:
+- `requirements.lock` - 生产依赖锁定
+- `requirements-dev.lock` - 开发依赖锁定(包含 pytest)
+
+添加新依赖后需重新生成锁定文件:
+```bash
+uv pip compile pyproject.toml -o requirements.lock
+uv pip compile pyproject.toml --extra dev -o requirements-dev.lock
 ```
 
 ## 使用
@@ -164,17 +182,41 @@ export DAXI_OUTPUT_DIR=data
 
 ## 输出
 
-默认写入 `data/runs/{timestamp}/`：
+### 默认输出位置
 
-- `raw_items.json` — 平台原始抓取
-- `shows.json` — **统一后的最终数据**
-- `result.json` — 运行汇总
+**数据目录**由 `app/core/paths.py` 自动管理:
+- **源码运行**: `backend/data/`
+- **打包后**: 可执行文件同级 `data/` 或系统用户目录
 
-`backend: sqlite` 时额外生成 `daxi.sqlite3`。
+可通过环境变量 `DAXI_DATA_DIR` 指定自定义位置。
+
+### 输出文件
+
+- `daxi.sqlite3` — SQLite 数据库(主存储)
+- `cookies/` — 浏览器 cookie 持久化
+  - `damai_storage.json`
+  - `maoyan_storage.json`
+- `configs/default.yaml` — 用户可编辑配置(首次从模板复制)
+
+**注意**: `backend/data/` 整个目录已被 `.gitignore` 排除,属于运行时产物,不进版本控制。
 
 ## 配置
 
-见 [`configs/default.yaml`](configs/default.yaml)。
+### 配置文件
+
+配置模板位于 `configs/default.yaml`,首次运行时会复制到用户数据目录供编辑。
+
+详见 [`configs/default.yaml`](configs/default.yaml)。
+
+### 环境变量
+
+项目根目录的 `.env.example` 列出了所有可用环境变量:
+- `DAXI_DATA_DIR` - 数据存储位置
+- `DAXI_LOG_LEVEL` - 日志级别
+- `PLAYWRIGHT_BROWSERS_PATH` - 浏览器路径
+- `BINGTOP_USERNAME/PASSWORD` - 打码平台账号
+
+复制 `.env.example` 为 `.env` 并填入实际值。
 
 ## 开发
 
