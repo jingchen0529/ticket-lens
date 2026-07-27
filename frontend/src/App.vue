@@ -5,6 +5,10 @@ import { checkForUpdate } from './updater.js'
 import CrawlView from './views/CrawlView.vue'
 import ShowsView from './views/ShowsView.vue'
 import SettingsView from './views/SettingsView.vue'
+import Toaster from '@/components/ui/toast/Toaster.vue'
+
+// 引入 shadcn UI 核心组件
+
 
 // 当前激活页面: 'crawl' | 'shows' | 'settings'
 const currentTab = ref('crawl')
@@ -88,6 +92,9 @@ watch(currentTab, (newTab, oldTab) => {
 
 <template>
   <div class="app-container">
+    <!-- 全局 Shadcn UI Toast 提醒框容器 -->
+    <Toaster />
+
     <!-- 极简 Header -->
     <header class="top-header">
       <div class="brand-area">

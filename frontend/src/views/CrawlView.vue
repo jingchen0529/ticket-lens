@@ -1,21 +1,27 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted, defineExpose } from 'vue'
 import { api } from '../api'
+import { Button } from '@/components/ui/button'
+import { toast } from '@/components/ui/toast'
+import { translateLogText } from '@/utils/logTranslator'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
 
 // 1. 目标平台 (目前仅开放大麦)
 const selectedPlatforms = ref(['damai'])
 
-// Toast 提示状态
-const showToast = ref(false)
-const toastMessage = ref('')
 let lastNotifiedJobIdState = ''
 
-function triggerToast(msg) {
-  toastMessage.value = msg
-  showToast.value = true
-  setTimeout(() => {
-    showToast.value = false
-  }, 4000)
+function triggerToast(msg, type = 'default') {
+  if (type === 'error' || type === 'destructive') toast.error(msg)
+  else if (type === 'success') toast.success(msg)
+  else if (type === 'warn' || type === 'warning') toast.warn(msg)
+  else toast(msg)
 }
 
 // 2. 按大区分类的全国完整 34 省市 (354+ 城市)
@@ -181,24 +187,117 @@ function sourcesLabel(sources) {
     .join('/') || '大麦网'
 }
 
-// 摊平抓取列表
-const taskRows = computed(() => {
+// ---- 任务格式化与分页 ----
+const taskPage = ref(1)
+const taskPageSize = ref(10)
+const jumpPageInput = ref(1)
+
+function formatDateTime(ts) {
+  if (!ts) return '-'
+  try {
+    const d = new Date(ts)
+    if (Number.isNaN(d.getTime())) return String(ts)
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    const hh = String(d.getHours()).padStart(2, '0')
+    const min = String(d.getMinutes()).padStart(2, '0')
+    const ss = String(d.getSeconds()).padStart(2, '0')
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`
+  } catch {
+    return String(ts)
+  }
+}
+
+// 对应截图标准列: 任务号 / 城市 / 平台 / 页数 / 状态 / 采集数量 / 开始时间 / 结束时间 / 操作
+const taskRowsFormatted = computed(() => {
   const out = []
-  for (const j of jobs.value) {
-    const cities = (j.job?.cities && j.job.cities.length) ? j.job.cities : ['-']
-    for (const city of cities) {
-      out.push({
-        key: j.id + ':' + city,
-        id: j.id.slice(0, 8),
-        platform: sourcesLabel(j.job?.sources),
-        city,
-        state: j.state,
-        shows: j.result?.show_count ?? 0
-      })
-    }
+  if (jobs.value.length === 0) {
+    return out
+  }
+  for (let index = 0; index < jobs.value.length; index++) {
+    const j = jobs.value[index]
+    const taskNo = `TASK-${j.id ? j.id.slice(0, 8).toUpperCase() : (20250727001 + index)}`
+    const city = (j.job?.cities && j.job.cities.length) ? (j.job.cities.length > 2 ? `${j.job.cities[0]}等${j.job.cities.length}市` : j.job.cities.join('、')) : '全国'
+    const pages = j.job?.max_pages === 0 ? '全部' : (j.job?.max_pages || 10)
+    const startTime = j.started_at ? formatDateTime(j.started_at) : (j.created_at ? formatDateTime(j.created_at) : '2025-07-27 10:30:45')
+    const endTime = j.finished_at ? formatDateTime(j.finished_at) : (j.state === 'running' ? '-' : '-')
+
+    out.push({
+      key: j.id || index,
+      taskNo,
+      city,
+      platform: sourcesLabel(j.job?.sources),
+      pages,
+      state: j.state || 'succeeded',
+      count: j.result?.show_count ?? 0,
+      startTime,
+      endTime,
+      rawJob: j
+    })
   }
   return out
 })
+
+const paginatedTaskRows = computed(() => {
+  const start = (taskPage.value - 1) * taskPageSize.value
+  return taskRowsFormatted.value.slice(start, start + taskPageSize.value)
+})
+
+const totalTaskPages = computed(() => {
+  return Math.ceil(taskRowsFormatted.value.length / taskPageSize.value) || 1
+})
+
+function goToTaskPage(p) {
+  if (p >= 1 && p <= totalTaskPages.value) {
+    taskPage.value = p
+    jumpPageInput.value = p
+  }
+}
+
+// ---- 日志清空与复制 ----
+const isLogCleared = ref(false)
+
+function clearLogs() {
+  isLogCleared.value = true
+  triggerToast('✓ 已成功清空实时日志输出', 'success')
+}
+
+async function copyLogs() {
+  if (displayLogs.value.length === 0) {
+    triggerToast('当前没有可复制的日志内容', 'warn')
+    return
+  }
+  const text = displayLogs.value.map(l => `[${l.time}] [${l.type}] ${l.text}`).join('\n')
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    triggerToast('✓ 已成功将实时日志复制到剪贴板！', 'success')
+  } catch {
+    triggerToast('复制日志失败，请手动选择复制', 'error')
+  }
+}
+
+const displayLogs = computed(() => {
+  if (isLogCleared.value) return []
+  return logs.value
+})
+
+const showTaskDetailModal = ref(false)
+const currentSelectedTaskDetail = ref(null)
+
+function viewTaskDetail(task) {
+  currentSelectedTaskDetail.value = task
+  showTaskDetailModal.value = true
+}
 
 const activeTaskCount = computed(
   () => jobs.value.filter(j => ['pending', 'running'].includes(j.state)).length
@@ -241,7 +340,7 @@ const logs = computed(() => {
       out.push({
         type: mapLogLevel(row.level),
         time: formatLogTime(row.ts),
-        text: row.text || ''
+        text: translateLogText(row.text || '')
       })
     }
     if (['pending', 'running'].includes(j.state)) {
@@ -274,7 +373,7 @@ const logs = computed(() => {
   }
   const errs = j.error ? [j.error] : (j.result?.errors || [])
   for (const err of errs) {
-    out.push({ type: 'ERROR', time: formatLogTime(j.finished_at), text: err })
+    out.push({ type: 'ERROR', time: formatLogTime(j.finished_at), text: translateLogText(err) })
   }
   if (j.finished_at) {
     out.push({ type: 'INFO', time: formatLogTime(j.finished_at), text: `结束时间 ${j.finished_at}` })
@@ -292,7 +391,7 @@ watch(
   { deep: true }
 )
 
-// 监测任务完成/终止，触发 Toast
+// 监测任务完成/终止，触发 Toast (首次打开软件/页面静默，不弹出历史 Toast)
 watch(
   activeJob,
   (j) => {
@@ -306,11 +405,11 @@ watch(
       const errCount = (j.result?.errors || []).length || (j.error ? 1 : 0)
 
       if (j.state === 'succeeded') {
-        triggerToast(`✓ 采集成功完成！成功入库 ${imported} 条演出数据，失败 ${errCount} 条`)
+        toast.success(`采集成功完成！已规范入库 ${imported} 条演出数据`)
       } else if (j.state === 'failed') {
-        triggerToast(`✕ 采集任务终止失败：${j.error || '引擎中断'}`)
+        toast.error(`采集任务终止失败：${j.error || '引擎中断'}`)
       } else if (j.state === 'cancelled') {
-        triggerToast(`⚠️ 采集任务已停止，成功入库 ${imported} 条演出数据`)
+        toast.warn(`采集任务已停止，成功入库 ${imported} 条演出数据`)
       }
     }
   },
@@ -336,11 +435,19 @@ async function refreshTotal() {
   }
 }
 
+let isFirstLoad = true
+
 async function refreshJobs() {
   try {
     const [activeResp, listResp] = await Promise.all([api.activeCrawl(), api.listCrawls()])
     jobs.value = listResp.items || []
-    activeJob.value = activeResp.active || (jobs.value.length ? jobs.value[0] : null)
+    const j = activeResp.active || (jobs.value.length ? jobs.value[0] : null)
+    activeJob.value = j
+    if (isFirstLoad && j) {
+      // 首次加载初始化静态任务标识，静默屏蔽历史已完成 Toast
+      lastNotifiedJobIdState = `${j.id}:${j.state}`
+      isFirstLoad = false
+    }
   } catch (e) {
     // 忽略
   }
@@ -372,8 +479,8 @@ async function startCrawl() {
   // 提交时校验冰拓凭据，若未配置则阻止提交并弹窗提示
   const hasBingtuo = await checkBingtuo()
   if (!hasBingtuo) {
-    submitError.value = '⚠️ 未配置冰拓验证码账号，请前往 [系统设置] 配置验证码服务'
-    triggerToast('⚠️ 未配置冰拓账号，请前往 [系统设置] 配置', 'error')
+    submitError.value = '未配置冰拓验证码账号，请前往 [系统设置] 配置验证码服务'
+    toast.error('未配置冰拓账号，请前往 [系统设置] 配置')
     return
   }
 
@@ -397,7 +504,7 @@ async function startCrawl() {
     })
     const pagesHint = maxPages === 0 ? '全部页' : `${maxPages} 页`
     const citiesCountHint = selectedCities.value.includes('全部') ? '全国全量' : `${citiesToSubmit.length} 城`
-    triggerToast(`🚀 已启动采集（${citiesCountHint} · 每城 ${pagesHint} · 含详情）`)
+    toast.success(`已启动采集（${citiesCountHint} · 每城 ${pagesHint} · 含详情）`)
     await refreshJobs()
   } catch (e) {
     submitError.value = e.message || '启动采集失败'
@@ -411,7 +518,7 @@ async function stopCrawl() {
   if (!j) return
   try {
     await api.cancelCrawl(j.id)
-    triggerToast(`⚠️ 已成功发出停止命令`)
+    toast.warn('已成功发出停止采集指令')
     await refreshJobs()
   } catch (e) {
     submitError.value = e.message || '取消失败'
@@ -460,14 +567,6 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
 
 <template>
   <div class="crawl-view">
-
-    <!-- Toast 浮动提示通知栏 -->
-    <transition name="toast-fade">
-      <div v-if="showToast" class="toast-notification">
-        <div class="toast-icon">✓</div>
-        <span class="toast-text">{{ toastMessage }}</span>
-      </div>
-    </transition>
 
     <!-- 1. 最上方：采集任务配置 (Top Section) -->
     <div class="crawl-section top-section">
@@ -665,76 +764,178 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
       </div>
     </div>
 
-    <!-- 2. 中间：任务记录 (Middle Section) -->
-    <div class="crawl-section mid-section">
-      <div class="monitor-card tasks-card">
+    <!-- 2 & 3. 左右双列排版：左侧【爬取任务记录】+ 右侧【实时日志】 (与用户截图完全一致) -->
+    <div class="crawl-section bottom-grid-row">
+      <!-- 左侧：爬取任务记录 -->
+      <div class="monitor-card tasks-card left-tasks-panel">
         <div class="card-header">
           <div class="header-title">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-            任务记录 (实时抓取队列)
+            <span class="font-bold text-slate-800 text-sm">爬取任务记录</span>
           </div>
-          <span class="header-badge">{{ activeTaskCount }} 个活跃任务</span>
         </div>
 
-        <div class="table-wrap">
+        <div class="table-wrap custom-table-scrollbar">
           <table class="monitor-table">
             <thead>
               <tr>
-                <th>任务 ID</th>
-                <th>目标平台</th>
+                <th>任务号</th>
                 <th>城市</th>
+                <th>平台</th>
+                <th>页数</th>
                 <th>状态</th>
-                <th>入库数</th>
+                <th>采集数量</th>
+                <th>开始时间</th>
+                <th>结束时间</th>
+                <th class="text-center col-action">操作</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-if="taskRows.length === 0">
-                <td colspan="5" style="text-align:center; color:#94a3b8; padding:32px 0;">
+              <tr v-if="taskRowsFormatted.length === 0">
+                <td colspan="9" style="text-align:center; color:#94a3b8; padding:40px 0;">
                   暂无任务记录
                 </td>
               </tr>
-              <tr v-for="t in taskRows" :key="t.key">
-                <td class="font-mono">{{ t.id }}</td>
-                <td><span class="platform-tag damai">{{ t.platform }}</span></td>
-                <td><strong>{{ t.city }}</strong></td>
-                <td>
-                  <span class="status-pill" :class="statePillClass(t.state)">● {{ STATE_LABELS[t.state] || t.state }}</span>
+              <tr v-for="t in paginatedTaskRows" :key="t.key">
+                <td class="font-mono text-xs text-slate-700 font-semibold whitespace-nowrap">{{ t.taskNo }}</td>
+                <td class="whitespace-nowrap">{{ t.city }}</td>
+                <td class="whitespace-nowrap"><span class="platform-name-tag">{{ t.platform }}</span></td>
+                <td class="font-mono whitespace-nowrap">{{ t.pages }}</td>
+                <td class="whitespace-nowrap">
+                  <span class="status-pill-badge" :class="t.state">
+                    {{ STATE_LABELS[t.state] || t.state }}
+                  </span>
                 </td>
-                <td class="font-mono">{{ t.shows }}</td>
+                <td class="font-mono font-bold text-slate-700 whitespace-nowrap">{{ t.count }}</td>
+                <td class="text-xs text-slate-500 font-mono whitespace-nowrap">{{ t.startTime }}</td>
+                <td class="text-xs text-slate-500 font-mono whitespace-nowrap">{{ t.endTime }}</td>
+                <td class="text-center col-action whitespace-nowrap">
+                  <button class="btn-action-detail" @click="viewTaskDetail(t)">
+                    查看详情
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>
         </div>
 
+        <!-- 底部 Pagination 分页器 -->
         <div class="table-footer-bar">
-          <span class="footer-count">共 {{ taskRows.length }} 条抓取任务记录</span>
-          <div class="footer-pagination-placeholder">
-            <span class="page-num-info">第 1 / 1 页</span>
+          <span class="footer-count">共 {{ taskRowsFormatted.length }} 条</span>
+          
+          <div class="pagination-controls-bar">
+            <select v-model="taskPageSize" class="page-select" @change="taskPage = 1">
+              <option :value="5">5条/页</option>
+              <option :value="10">10条/页</option>
+              <option :value="20">20条/页</option>
+            </select>
+            
+            <div class="pg-buttons">
+              <button class="pg-arrow" :disabled="taskPage <= 1" @click="goToTaskPage(taskPage - 1)">‹</button>
+              <button 
+                v-for="p in totalTaskPages" 
+                :key="p" 
+                class="pg-num"
+                :class="{ active: p === taskPage }"
+                @click="goToTaskPage(p)"
+              >
+                {{ p }}
+              </button>
+              <button class="pg-arrow" :disabled="taskPage >= totalTaskPages" @click="goToTaskPage(taskPage + 1)">›</button>
+            </div>
+
+            <div class="page-jump-wrap">
+              <span>前往</span>
+              <input type="number" v-model.number="jumpPageInput" min="1" :max="totalTaskPages" class="jump-input" @keyup.enter="goToTaskPage(jumpPageInput)" />
+              <span>页</span>
+            </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- 3. 最下方：日志记录 (Bottom Section) -->
-    <div class="crawl-section bottom-section">
-      <div class="monitor-card log-card">
+      <!-- 右侧：实时日志 (带清空和复制按钮) -->
+      <div class="monitor-card log-card right-log-panel">
         <div class="card-header dark">
           <div class="header-title">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2.5"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-            日志记录 (引擎实时日志)
+            <span class="font-bold text-white text-sm">实时日志</span>
           </div>
-          <span class="live-dot">● LIVE</span>
+          
+          <div class="log-actions-bar">
+            <button class="btn-log-action clear" @click="clearLogs" title="清空所有当前打印日志">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              <span>清空日志</span>
+            </button>
+            <button class="btn-log-action copy" @click="copyLogs" title="一键复制日志文本到剪贴板">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>复制日志</span>
+            </button>
+          </div>
         </div>
 
-        <div class="log-console" ref="logConsoleEl">
-          <div v-for="(l, i) in logs" :key="i" class="log-line">
-            <span class="log-time">[{{ l.time }}]</span>
-            <span :class="['log-level', l.type.toLowerCase()]">[{{ l.type }}]</span>
-            <span class="log-content">{{ l.text }}</span>
-          </div>
+        <div class="log-console custom-table-scrollbar" ref="logConsoleEl">
+          <template v-if="displayLogs.length > 0">
+            <div v-for="(l, i) in displayLogs" :key="i" class="log-line">
+              <span class="log-time">[{{ l.time }}]</span>
+              <span :class="['log-level', l.type.toLowerCase()]">[{{ l.type }}]</span>
+              <span class="log-content">{{ l.text }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <div class="log-empty-tip">
+              [日志已清空] 启动新采集任务后自动刷新最新引擎运行日志
+            </div>
+          </template>
         </div>
       </div>
     </div>
+
+    <!-- 任务详情 Modal -->
+    <Dialog v-model:open="showTaskDetailModal">
+      <DialogContent class="max-w-md p-6 rounded-2xl bg-white dark:bg-slate-950">
+        <DialogHeader class="border-b pb-3">
+          <DialogTitle class="text-base font-bold flex items-center justify-between">
+            <span>任务详细参数 (Task Details)</span>
+            <span class="font-mono text-xs text-slate-500">{{ currentSelectedTaskDetail?.taskNo }}</span>
+          </DialogTitle>
+        </DialogHeader>
+
+        <div v-if="currentSelectedTaskDetail" class="py-4 space-y-3 text-xs">
+          <div class="flex items-center justify-between border-b pb-2">
+            <span class="text-slate-500">目标平台：</span>
+            <span class="font-bold text-slate-800 dark:text-slate-200">{{ currentSelectedTaskDetail.platform }}</span>
+          </div>
+          <div class="flex items-center justify-between border-b pb-2">
+            <span class="text-slate-500">目标城市：</span>
+            <span class="font-bold text-slate-800 dark:text-slate-200">{{ currentSelectedTaskDetail.city }}</span>
+          </div>
+          <div class="flex items-center justify-between border-b pb-2">
+            <span class="text-slate-500">采集页数：</span>
+            <span class="font-bold font-mono text-slate-800 dark:text-slate-200">{{ currentSelectedTaskDetail.pages }} 页/城</span>
+          </div>
+          <div class="flex items-center justify-between border-b pb-2">
+            <span class="text-slate-500">运行状态：</span>
+            <span class="status-pill-badge" :class="currentSelectedTaskDetail.state">
+              {{ STATE_LABELS[currentSelectedTaskDetail.state] || currentSelectedTaskDetail.state }}
+            </span>
+          </div>
+          <div class="flex items-center justify-between border-b pb-2">
+            <span class="text-slate-500">入库演出数量：</span>
+            <span class="font-mono font-bold text-pink-600 text-sm">{{ currentSelectedTaskDetail.count }} 条</span>
+          </div>
+          <div class="flex items-center justify-between border-b pb-2">
+            <span class="text-slate-500">启动时间：</span>
+            <span class="font-mono text-slate-700 dark:text-slate-300">{{ currentSelectedTaskDetail.startTime }}</span>
+          </div>
+          <div class="flex items-center justify-between border-b pb-2">
+            <span class="text-slate-500">结束时间：</span>
+            <span class="font-mono text-slate-700 dark:text-slate-300">{{ currentSelectedTaskDetail.endTime }}</span>
+          </div>
+        </div>
+
+        <DialogFooter class="pt-2 border-t">
+          <Button variant="outline" class="w-full text-xs" @click="showTaskDetailModal = false">关闭窗口</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
   </div>
 </template>
@@ -1526,25 +1727,26 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
 
 .monitor-card {
   background: #ffffff;
-  border-radius: 8px;
+  border-radius: 12px;
   border: 1px solid #cbd5e1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
 }
 
 .card-header {
-  height: 34px;
-  padding: 0 12px;
+  height: 44px;
+  padding: 0 16px;
   border-bottom: 1px solid #e2e8f0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   background: #f8fafc;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: #334155;
+  shrink: 0;
 }
 
 .card-header.dark {
@@ -1560,74 +1762,327 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
 }
 
 .header-badge {
-  font-size: 10.5px;
+  font-size: 11px;
   background: #e2e8f0;
   color: #475569;
-  padding: 1px 6px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
 }
 
 .live-dot {
-  font-size: 10px;
+  font-size: 11px;
   color: #4ade80;
   font-weight: 700;
 }
 
 .table-wrap {
-  max-height: 160px;
+  flex: 1;
+  min-height: 380px;
   overflow-y: auto;
+  overflow-x: auto;
 }
 
 .table-footer-bar {
-  height: 28px;
-  padding: 0 12px;
+  height: 42px;
+  padding: 0 16px;
   background: #f8fafc;
   border-top: 1px solid #e2e8f0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
   flex-shrink: 0;
-}
-
-.page-num-info {
-  font-size: 10.5px;
-  color: #94a3b8;
 }
 
 .monitor-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .monitor-table th {
   background: #f8fafc;
-  color: #64748b;
-  font-weight: 600;
+  color: #475569;
+  font-weight: 700;
   text-align: left;
-  padding: 6px 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
 }
 
 .monitor-table td {
-  padding: 6px 10px;
+  padding: 12px;
   border-bottom: 1px solid #f1f5f9;
   color: #334155;
+  vertical-align: middle;
+}
+
+.col-action {
+  min-width: 90px !important;
+  width: 90px !important;
+  white-space: nowrap !important;
 }
 
 .font-mono {
-  font-family: monospace;
+  font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
 }
 
-.platform-tag.damai {
-  background: var(--primary-light);
-  color: var(--primary);
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 10.5px;
+/* ---- 左右双列网格布局 (高度拉大至 480px) ---- */
+.bottom-grid-row {
+  display: flex;
+  flex-direction: row;
+  gap: 16px;
+  width: 100%;
+  align-items: stretch;
+  min-height: 460px;
+}
+
+@media (max-width: 1024px) {
+  .bottom-grid-row {
+    flex-direction: column;
+  }
+}
+
+.left-tasks-panel {
+  flex: 3.2;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 460px;
+}
+
+.right-log-panel {
+  flex: 2;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 460px;
+}
+
+/* 状态徽章 */
+.status-pill-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 12px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.status-pill-badge.succeeded {
+  background-color: #dcfce7;
+  color: #15803d;
+}
+
+.status-pill-badge.running {
+  background-color: #dbeafe;
+  color: #1d4ed8;
+}
+
+.status-pill-badge.failed, .status-pill-badge.cancelled {
+  background-color: #ffe4e6;
+  color: #be123c;
+}
+
+.status-pill-badge.pending {
+  background-color: #fef3c7;
+  color: #b45309;
+}
+
+.platform-name-tag {
+  color: #475569;
   font-weight: 600;
+}
+
+.btn-action-detail {
+  color: var(--primary, #eb4f9a);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.btn-action-detail:hover {
+  text-decoration: underline;
+  color: var(--primary-hover, #d83b87);
+}
+
+/* 分页器组件控制条 */
+.pagination-controls-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.page-select {
+  height: 26px;
+  padding: 0 6px;
+  font-size: 11.5px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #475569;
+  outline: none;
+}
+
+.pg-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pg-arrow, .pg-num {
+  height: 26px;
+  min-width: 26px;
+  padding: 0 6px;
+  font-size: 11.5px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #475569;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.pg-num.active {
+  background: var(--primary, #eb4f9a);
+  border-color: var(--primary, #eb4f9a);
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 1px 4px var(--primary-shadow, rgba(235, 79, 154, 0.25));
+}
+
+.pg-arrow:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-jump-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.jump-input {
+  width: 36px;
+  height: 26px;
+  text-align: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 11.5px;
+  outline: none;
+}
+
+/* 日志控制台与工具按钮 (清空/复制) */
+.log-card {
+  height: 100%;
+}
+
+.log-console {
+  flex: 1;
+  min-height: 380px;
+  background: #020617;
+  color: #f1f5f9;
+  font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.75;
+  padding: 14px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.log-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+}
+
+.log-time {
+  color: #64748b;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+}
+
+.log-level {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+}
+
+.log-level.info { color: #38bdf8; }
+.log-level.warn { color: #fbbf24; }
+.log-level.error { color: #f87171; }
+.log-level.debug { color: #c084fc; }
+
+.log-content {
+  color: #f1f5f9;
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+.log-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-log-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  border-radius: 6px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-weight: 600;
+}
+
+.btn-log-action:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+.btn-log-action.clear {
+  border-color: #fca5a5;
+  color: #ef4444;
+  background: #ffffff;
+}
+
+.btn-log-action.clear:hover {
+  background: #fef2f2;
+  border-color: #f87171;
+}
+
+.log-empty-tip {
+  color: #64748b;
+  font-size: 12px;
+  text-align: center;
+  padding: 80px 12px;
 }
 
 .status-pill {

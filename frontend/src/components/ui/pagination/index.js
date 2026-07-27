@@ -1,0 +1,7 @@
+export { default as Pagination } from './Pagination.vue'
+export { default as PaginationList } from './PaginationList.vue'
+export { default as PaginationFirst } from './PaginationFirst.vue'
+export { default as PaginationPrev } from './PaginationPrev.vue'
+export { default as PaginationNext } from './PaginationNext.vue'
+export { default as PaginationLast } from './PaginationLast.vue'
+export { default as PaginationEllipsis } from './PaginationEllipsis.vue'

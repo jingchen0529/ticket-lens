@@ -5,6 +5,41 @@ import { writeFile } from '@tauri-apps/plugin-fs'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
 import { api, IN_TAURI } from '../api'
 
+// 引入 shadcn-ui 核心组件
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import { toast } from '@/components/ui/toast'
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
+import { Field, FieldLabel, FieldDescription } from '@/components/ui/field'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableCell,
+  TableHead,
+  TableEmpty,
+} from '@/components/ui/table'
+import {
+  Pagination,
+  PaginationList,
+  PaginationPrev,
+  PaginationNext,
+  PaginationFirst,
+  PaginationLast,
+} from '@/components/ui/pagination'
+
+// 引入 custom 目录下抽取的公共 Modal 业务组件
+import ColumnConfigModal from '@/components/custom/ColumnConfigModal.vue'
+import ExportModal from '@/components/custom/ExportModal.vue'
+import ClearDataModal from '@/components/custom/ClearDataModal.vue'
+import ShowDetailModal from '@/components/custom/ShowDetailModal.vue'
+import ShowEditModal from '@/components/custom/ShowEditModal.vue'
+import SingleDeleteModal from '@/components/custom/SingleDeleteModal.vue'
+import ImagePreviewModal from '@/components/custom/ImagePreviewModal.vue'
+
 // 平台中文映射（对应后端枚举）
 const SOURCE_LABELS = { damai: '大麦网', maoyan: '猫眼' }
 
@@ -25,6 +60,123 @@ const filters = reactive({
   category: 'all',
   status: 'all'
 })
+
+function statusBadgeVariant(state) {
+  if (state === '未演出' || state === 'upcoming') return 'default'
+  if (state === '演出中' || state === 'ongoing') return 'secondary'
+  if (state === '已演出' || state === 'done') return 'outline'
+  if (state === '取消' || state === 'cancelled') return 'destructive'
+  return 'secondary'
+}
+
+function statusBadgeClass(state) {
+  if (state === '未演出' || state === 'upcoming') {
+    return 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800'
+  }
+  if (state === '演出中' || state === 'ongoing') {
+    return 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'
+  }
+  if (state === '已演出' || state === 'done') {
+    return 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+  }
+  if (state === '取消' || state === 'cancelled') {
+    return 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800'
+  }
+  return 'bg-slate-100 text-slate-700 border-slate-200'
+}
+
+function formatShowTime(timeStr) {
+  if (!timeStr) return '暂无时间'
+  let str = String(timeStr).replace('T', ' ')
+  if (str.length > 16 && str.includes(':')) {
+    str = str.substring(0, 16)
+  }
+  return str
+}
+
+function formatSingleChip(val, index = 0) {
+  let text = String(val).trim()
+  if (!text) return null
+  let tag = ''
+  let tagType = ''
+
+  if (text.includes('缺货') || text.includes('无票')) {
+    tag = '缺货登记'
+    tagType = 'soldout'
+    text = text.replace(/缺货登记|缺货|无票/g, '').trim()
+  } else if (text.includes('惠') || text.includes('早鸟')) {
+    tag = '惠'
+    tagType = 'hui'
+    text = text.replace(/惠|早鸟/g, '').trim()
+  }
+
+  let numStr = text.replace(/[^0-9.]/g, '')
+  if (numStr && !isNaN(numStr)) {
+    let num = parseFloat(numStr)
+    text = (Number.isInteger(num) ? num : num.toFixed(1)) + '元'
+  } else if (!text.includes('元') && text.length > 0) {
+    text = text + '元'
+  }
+
+  return {
+    text: text,
+    tag,
+    tagType,
+    isPrimary: index === 1
+  }
+}
+
+function parsePriceChips(priceVal) {
+  if (!priceVal) return [{ text: '暂无票价数据', raw: true }]
+
+  let str = String(priceVal).trim()
+  if (!str || str === '[object Object]' || str === 'Object' || str === 'null' || str === 'undefined') {
+    return [{ text: '暂无票价数据', raw: true }]
+  }
+
+  if ((str.startsWith('[') && str.endsWith(']')) || (str.startsWith('{') && str.endsWith('}'))) {
+    try {
+      const parsed = JSON.parse(str)
+      return parsePriceChips(parsed)
+    } catch (e) {}
+  }
+
+  if (Array.isArray(priceVal)) {
+    const list = priceVal.map((item, idx) => formatSingleChip(typeof item === 'object' ? item.price || item.name : item, idx)).filter(Boolean)
+    return list.length > 0 ? list : [{ text: '暂无票价数据', raw: true }]
+  }
+
+  if (typeof priceVal === 'object' && priceVal !== null) {
+    if (priceVal.price) return parsePriceChips(priceVal.price)
+    if (priceVal.priceRange) return parsePriceChips(priceVal.priceRange)
+    if (priceVal.text) return parsePriceChips(priceVal.text)
+    const vals = Object.values(priceVal).filter(v => typeof v === 'string' || typeof v === 'number')
+    if (vals.length > 0) return [{ text: vals.join(' / '), raw: true }]
+    return [{ text: '暂无票价数据', raw: true }]
+  }
+
+  // Format A: "CNY / 166 / 866 / 166|366|566|766|866" or "120|680"
+  if (str.includes('|')) {
+    const parts = str.split('/')
+    const pipePart = parts.find(p => p.includes('|')) || str
+    const prices = pipePart.split('|').map(s => s.trim()).filter(Boolean)
+    const list = prices.map((p, idx) => formatSingleChip(p, idx)).filter(Boolean)
+    return list.length > 0 ? list : [{ text: str, raw: true }]
+  }
+
+  if (str.startsWith('CNY') && !str.includes('|')) {
+    return [{ text: str, raw: true }]
+  }
+
+  const items = str.split(/[/,、;\s]+/).map(s => s.trim()).filter(Boolean)
+  if (items.length <= 1) {
+    const single = formatSingleChip(str, 0)
+    return single ? [single] : [{ text: str, raw: true }]
+  }
+
+  const list = items.map((item, idx) => formatSingleChip(item, idx)).filter(Boolean)
+  return list.length > 0 ? list : [{ text: str, raw: true }]
+}
 
 const showColumnModal = ref(false)
 
@@ -56,20 +208,11 @@ function cleanPosterUrl(url) {
   return s
 }
 
-// Toast 提示状态（success / error 两种样式）
-const showToast = ref(false)
-const toastMessage = ref('')
-const toastType = ref('success')
-let toastTimer = null
-
 function triggerToast(msg, type = 'success') {
-  toastMessage.value = msg
-  toastType.value = type
-  showToast.value = true
-  clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => {
-    showToast.value = false
-  }, type === 'error' ? 5000 : 3000)
+  if (type === 'error' || type === 'destructive') toast.error(msg)
+  else if (type === 'success') toast.success(msg)
+  else if (type === 'warn' || type === 'warning') toast.warn(msg)
+  else toast(msg)
 }
 
 // 2. 字段定义 —— 严格对齐《北京市演出信息》模板 36 列表头。
@@ -112,8 +255,111 @@ const columns = ref([
   { key: 'troupe_attr', title: '院团属性', width: '100px', visible: true },
   { key: 'performers', title: '演员', width: '150px', visible: true },
   { key: 'price', title: '票价档', width: '180px', visible: true },
-  { key: 'url', title: 'url', width: '220px', visible: true }
+  { key: 'url', title: 'url', width: '220px', visible: true },
+  { key: 'actions', title: '操作', width: '160px', visible: true }
 ])
+
+// 详情、编辑、删除 模态框状态与数据
+const showDetailModal = ref(false)
+const detailRow = ref(null)
+
+function openDetail(row) {
+  detailRow.value = row
+  showDetailModal.value = true
+}
+
+const showEditModal = ref(false)
+const editRowData = reactive({
+  id: '',
+  seq: '',
+  poster_url: '',
+  title: '',
+  norm_title: '',
+  city: '',
+  district: '',
+  venue_name: '',
+  norm_venue: '',
+  start_time: '',
+  year: '',
+  month: '',
+  quarter: '',
+  day: '',
+  weekday: '',
+  holiday: '',
+  troupe: '',
+  group_city: '',
+  hk_mo_tw: '',
+  organizer: '',
+  organizer_city: '',
+  category: '',
+  subcategory: '',
+  session_count: 1,
+  perf_state: '',
+  troupe_attr: '',
+  performers: '',
+  price: '',
+  url: ''
+})
+
+function openEdit(row) {
+  editRowData.id = row.id || ''
+  editRowData.seq = row.seq || ''
+  editRowData.poster_url = row.poster_url || ''
+  editRowData.title = row.title || ''
+  editRowData.norm_title = row.norm_title || row.title || ''
+  editRowData.city = row.city || ''
+  editRowData.district = row.district || ''
+  editRowData.venue_name = row.venue_name || ''
+  editRowData.norm_venue = row.norm_venue || row.venue_name || ''
+  editRowData.start_time = row.start_time || ''
+  editRowData.year = row.year || ''
+  editRowData.month = row.month || ''
+  editRowData.quarter = row.quarter || ''
+  editRowData.day = row.day || ''
+  editRowData.weekday = row.weekday || ''
+  editRowData.holiday = row.holiday || ''
+  editRowData.troupe = row.troupe || ''
+  editRowData.group_city = row.group_city || ''
+  editRowData.hk_mo_tw = row.hk_mo_tw || ''
+  editRowData.organizer = row.organizer || ''
+  editRowData.organizer_city = row.organizer_city || ''
+  editRowData.category = row.category || ''
+  editRowData.subcategory = row.subcategory || ''
+  editRowData.session_count = row.session_count || 1
+  editRowData.perf_state = row.perf_state || 'upcoming'
+  editRowData.troupe_attr = row.troupe_attr || ''
+  editRowData.performers = row.performers || ''
+  editRowData.price = row.price || ''
+  editRowData.url = row.url || ''
+  showEditModal.value = true
+}
+
+function saveEdit() {
+  const target = rows.value.find(r => r.id === editRowData.id)
+  if (target) {
+    Object.assign(target, JSON.parse(JSON.stringify(editRowData)))
+  }
+  showEditModal.value = false
+  triggerToast('全量演出字段修改保存成功！', 'success')
+}
+
+const showSingleDeleteModal = ref(false)
+const deleteTargetRow = ref(null)
+
+function openDeleteConfirm(row) {
+  deleteTargetRow.value = row
+  showSingleDeleteModal.value = true
+}
+
+function confirmSingleDelete() {
+  if (deleteTargetRow.value) {
+    rows.value = rows.value.filter(r => r.id !== deleteTargetRow.value.id)
+    selectedRowIds.value = selectedRowIds.value.filter(id => id !== deleteTargetRow.value.id)
+    total.value = Math.max(0, total.value - 1)
+    triggerToast('已删除该条演出记录', 'success')
+  }
+  showSingleDeleteModal.value = false
+}
 
 const visibleColumns = computed(() => columns.value.filter(c => c.visible))
 const totalColumns = computed(() => columns.value.length)
@@ -531,14 +777,6 @@ defineExpose({ refresh, fetchShows, loadFacets })
 <template>
   <div class="shows-view">
 
-    <!-- Toast 浮动提示通知栏 -->
-    <transition name="toast-fade">
-      <div v-if="showToast" class="toast-notification" :class="toastType">
-        <div class="toast-icon">{{ toastType === 'error' ? '✕' : '✓' }}</div>
-        <span class="toast-text">{{ toastMessage }}</span>
-      </div>
-    </transition>
-
     <!-- 图1/图2 经典大麦城市筛选展示卡片 -->
     <div class="city-picker-card">
       <div class="active-city-header">
@@ -552,65 +790,66 @@ defineExpose({ refresh, fetchShows, loadFacets })
         <!-- 展开模式下的快速查找城市搜索框 -->
         <div v-if="isCityExpanded" class="city-search-box">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="city-search-icon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input
+          <Input
             type="text"
             v-model="citySearchQuery"
             placeholder="搜索城市..."
             class="city-search-input"
           />
-          <button v-if="citySearchQuery" class="clear-city-search" @click="citySearchQuery = ''">✕</button>
+          <Button v-if="citySearchQuery" variant="ghost" class="clear-city-search" @click="citySearchQuery = ''">✕</Button>
         </div>
       </div>
 
       <div class="city-grid-container" :class="{ expanded: isCityExpanded }">
         <div class="city-scroll-area" :class="{ expanded: isCityExpanded }">
           <div class="city-chips-list">
-            <button
+            <Button
               v-for="c in visibleCityOptions"
               :key="c"
+              variant="ghost"
               class="city-chip-btn"
               :class="{ active: (c === '全部' && filters.city === 'all') || filters.city === c }"
               @click="handleCitySelect(c)"
             >
               {{ c }}
-            </button>
+            </Button>
             <div v-if="visibleCityOptions.length === 0" class="no-city-match">
               未找到匹配城市
             </div>
           </div>
         </div>
 
-        <button class="expand-toggle-btn" @click="isCityExpanded = !isCityExpanded">
+        <Button variant="ghost" class="expand-toggle-btn" @click="isCityExpanded = !isCityExpanded">
           <span>{{ isCityExpanded ? '收起' : '更多' }}</span>
           <svg v-if="isCityExpanded" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
           <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-        </button>
+        </Button>
       </div>
     </div>
 
     <!-- 顶部 Filter 综合筛选栏（全部元素单行开阔并排） -->
     <div class="filter-card">
       <div class="filter-row">
-         <button class="btn-icon-refresh" :disabled="refreshing || loading" title="刷新数据" @click="handleRefresh">
+         <Button variant="outline" size="icon" class="h-8 w-8 shrink-0" :disabled="refreshing || loading" title="刷新数据" @click="handleRefresh">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" :class="{ 'icon-spin': refreshing || loading }"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-          </button>
+          </Button>
         <!-- 1. 列显示设置 按钮 -->
-        <button class="tool-btn" @click="showColumnModal = true">
+        <Button variant="outline" size="sm" class="h-8 text-xs gap-1.5 shrink-0" @click="showColumnModal = true">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"/></svg>
           列显示
-        </button>
+        </Button>
 
         <!-- 2. 导出 Excel 按钮 -->
-        <button class="tool-btn export" @click="handleExportClick">
+        <Button variant="outline" size="sm" class="h-8 text-xs gap-1.5 shrink-0 border-blue-200 text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-800 dark:text-blue-400" @click="handleExportClick">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           导出
-        </button>
+        </Button>
 
         <!-- 3. 清除数据 按钮 -->
-        <button class="tool-btn danger" :disabled="clearing" @click="showClearModal = true">
+        <Button variant="destructive" size="sm" class="h-8 text-xs gap-1.5 shrink-0" :disabled="clearing" @click="showClearModal = true">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           清除数据
-        </button>
+        </Button>
 
         <div class="filter-divider"></div>
 
@@ -619,7 +858,7 @@ defineExpose({ refresh, fetchShows, loadFacets })
           <span class="field-label">关键词</span>
           <div class="search-input-wrap">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input
+            <Input
               type="text"
               v-model="filters.keyword"
               placeholder="剧目名称"
@@ -659,23 +898,22 @@ defineExpose({ refresh, fetchShows, loadFacets })
           </select>
         </div>
 
-        <!-- 8. 查询 & 重置 & 刷新 按钮 -->
-        <div class="filter-actions">
-          <button class="btn-search" @click="doSearch">
+        <!-- 8. 查询 & 重置 按钮 -->
+        <div class="filter-actions flex items-center gap-2">
+          <Button variant="default" size="sm" class="h-8 text-xs gap-1.5 btn-theme-primary text-white" @click="doSearch">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             查询
-          </button>
-          <button class="btn-reset-filter" @click="resetFilters">
+          </Button>
+          <Button variant="outline" size="sm" class="h-8 text-xs gap-1.5" @click="resetFilters">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             重置
-          </button>
-         
+          </Button>
         </div>
       </div>
     </div>
 
-    <!-- 超宽数据表格 Wide Data Grid -->
-    <div class="grid-card">
+    <!-- 超宽数据表格 Wide Data Grid (独立卡片，表格与分页解耦，支持畅快横滑与表头吸顶) -->
+    <div class="table-card-container flex-1 min-h-0 rounded-md border border-slate-200/80 dark:border-slate-800 shadow-sm bg-card transition-all relative flex flex-col overflow-hidden">
       <!-- 刷新已有数据时的半透明加载遮罩 -->
       <div v-if="(loading || refreshing) && rows.length > 0" class="table-loading-overlay">
         <div class="loading-pill">
@@ -683,277 +921,272 @@ defineExpose({ refresh, fetchShows, loadFacets })
           <span>正在刷新数据…</span>
         </div>
       </div>
-      <div class="grid-table-container">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th class="col-chk">
-                <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll" />
-              </th>
-              <th
-                v-for="(col, ci) in visibleColumns"
-                :key="ci"
-                :style="{ width: col.width, minWidth: col.width }"
-              >
-                <div class="th-content">
-                  <span class="th-text">{{ col.title }}</span>
-                </div>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="loading && rows.length === 0">
-              <td :colspan="visibleColumns.length + 1" class="empty-cell">
-                <span class="loading-inline"><span class="loading-spinner small"></span> 正在加载数据…</span>
-              </td>
-            </tr>
-            <tr v-else-if="!loading && rows.length === 0">
-              <td :colspan="visibleColumns.length + 1" class="empty-cell" :class="{ 'error-cell': errorMsg }">
-                {{ errorMsg || '暂无数据，请先在「数据采集」页启动采集' }}
-              </td>
-            </tr>
-            <tr v-for="(row, rowIndex) in rows" :key="row.id" :class="{ selected: selectedRowIds.includes(row.id) }">
-              <td class="col-chk">
-                <input type="checkbox" :value="row.id" v-model="selectedRowIds" />
-              </td>
-              <td v-for="col in visibleColumns" :key="col.title" class="td-cell">
-                <!-- 海报缩略图：点击放大预览 -->
-                <template v-if="col.key === 'poster'">
-                  <img
-                    v-if="cleanPosterUrl(row.poster_url)"
-                    :src="cleanPosterUrl(row.poster_url)"
-                    class="poster-thumb"
-                    loading="lazy"
-                    referrerpolicy="no-referrer"
-                    :alt="row.title"
-                    @click.stop="openPreview(row.poster_url, row.title)"
-                  />
-                  <span v-else class="poster-empty">—</span>
-                </template>
 
-                <!-- 状态 Badge：演出状态（按演出时间与今天比较） -->
-                <template v-else-if="col.key === 'status'">
-                  <span v-if="row.perf_state" class="state-badge" :class="statusClass(row.perf_state)">
-                    <span class="state-dot"></span>{{ row.perf_state }}
-                  </span>
-                  <span v-else>-</span>
-                </template>
+      <!-- 独立 Table 滚动视图：包裹层为唯一的 overflow-auto 产生真正的滚动上下文 -->
+      <Table wrapperClass="w-full h-full overflow-auto custom-table-scrollbar" class="data-table border-collapse min-w-[1400px]">
+        <TableHeader class="sticky top-0 z-30 shadow-xs">
+          <TableRow class="hover:bg-transparent">
+            <!-- 勾选列 Header (吸顶 + 左浮) -->
+            <TableHead class="col-chk w-[44px] text-center sticky top-0 left-0 z-40 bg-slate-100 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
+              <Checkbox :checked="isAllSelected" @update:checked="toggleSelectAll" />
+            </TableHead>
+            <!-- 各数据列 Header (吸顶) -->
+            <TableHead
+              v-for="(col, ci) in visibleColumns"
+              :key="ci"
+              :style="{ width: col.width, minWidth: col.width }"
+              class="text-xs font-bold text-slate-700 dark:text-slate-200 py-3 tracking-wide sticky top-0 z-30 bg-slate-100 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800"
+              :class="{ 'sticky right-0 z-40 bg-slate-100 dark:bg-slate-900 border-l border-slate-300 dark:border-slate-700 shadow-[-12px_0_20px_-3px_rgba(0,0,0,0.18)] text-center': col.key === 'actions' }"
+            >
+              <div class="th-content">
+                <span class="th-text">{{ col.title }}</span>
+              </div>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow v-if="loading && rows.length === 0">
+            <TableCell :colspan="visibleColumns.length + 1" class="empty-cell text-center py-10">
+              <span class="loading-inline"><span class="loading-spinner small"></span> 正在加载数据…</span>
+            </TableCell>
+          </TableRow>
+          <TableRow v-else-if="!loading && rows.length === 0">
+            <TableCell :colspan="visibleColumns.length + 1" class="empty-cell text-center py-10" :class="{ 'error-cell': errorMsg }">
+              {{ errorMsg || '暂无数据，请先在「数据采集」页启动采集' }}
+            </TableCell>
+          </TableRow>
+          <TableRow
+            v-for="(row, rowIndex) in rows"
+            :key="row.id"
+            class="group border-b border-slate-100 dark:border-slate-800/60 hover:bg-slate-50/80 dark:hover:bg-slate-900/50 transition-colors text-xs"
+            :class="{ 'bg-pink-100/60 dark:bg-pink-950/50 font-medium': selectedRowIds.includes(row.id) }"
+          >
+            <TableCell class="col-chk text-center">
+              <Checkbox :checked="selectedRowIds.includes(row.id)" @update:checked="(v) => { if (v) { if (!selectedRowIds.includes(row.id)) selectedRowIds.push(row.id) } else { selectedRowIds = selectedRowIds.filter(id => id !== row.id) } }" />
+            </TableCell>
+            <TableCell
+              v-for="col in visibleColumns"
+              :key="col.title"
+              class="td-cell py-3"
+              :class="{ 'sticky right-0 z-20 bg-white dark:bg-slate-950 group-hover:bg-slate-50 dark:group-hover:bg-slate-900 border-l border-slate-300 dark:border-slate-700 shadow-[-12px_0_20px_-3px_rgba(0,0,0,0.15)]': col.key === 'actions' }"
+            >
+              <!-- 海报缩略图：点击放大预览 -->
+              <template v-if="col.key === 'poster'">
+                <img
+                  v-if="cleanPosterUrl(row.poster_url)"
+                  :src="cleanPosterUrl(row.poster_url)"
+                  class="poster-thumb w-8 h-11 rounded border object-cover shadow-2xs cursor-pointer hover:scale-110 transition-transform"
+                  loading="lazy"
+                  referrerpolicy="no-referrer"
+                  :alt="row.title"
+                  @click.stop="openPreview(row.poster_url, row.title)"
+                />
+                <span v-else class="poster-empty text-slate-300">—</span>
+              </template>
 
-                <!-- URL 链接：点击统一由 openExternalUrl 处理（Tauri 内唤起系统浏览器），
-                     保留 href 以便悬停预览/右键复制，prevent 阻止 WebView 内导航 -->
-                <template v-else-if="col.key === 'url'">
-                  <a
-                    v-if="row.url"
-                    :href="row.url"
-                    class="url-link"
-                    @click.stop.prevent="openExternalUrl(row.url)"
-                    :title="row.url"
+              <!-- 状态 Badge：演出状态 -->
+              <template v-else-if="col.key === 'status'">
+                <span
+                  v-if="row.perf_state"
+                  class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border shadow-2xs"
+                  :class="statusBadgeClass(row.perf_state)"
+                >
+                  <span
+                    class="w-1.5 h-1.5 rounded-full shrink-0"
+                    :class="{
+                      'bg-blue-600': row.perf_state === '未演出' || row.perf_state === 'upcoming',
+                      'bg-emerald-600 animate-pulse': row.perf_state === '演出中' || row.perf_state === 'ongoing',
+                      'bg-slate-500': row.perf_state === '已演出' || row.perf_state === 'done',
+                      'bg-red-600': row.perf_state === '取消' || row.perf_state === 'cancelled'
+                    }"
+                  ></span>
+                  <span>{{ row.perf_state }}</span>
+                </span>
+                <span v-else class="text-slate-300">-</span>
+              </template>
+
+              <!-- URL 链接 -->
+              <template v-else-if="col.key === 'url'">
+                <a
+                  v-if="row.url"
+                  :href="row.url"
+                  class="url-link text-blue-600 hover:underline font-mono text-[11px] flex items-center gap-1"
+                  @click.stop.prevent="openExternalUrl(row.url)"
+                  :title="row.url"
+                >
+                  <span class="url-text truncate max-w-[180px]">{{ row.url }}</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                </a>
+                <span v-else class="text-slate-300">-</span>
+              </template>
+
+              <!-- 操作列：固钉在右侧 (Sticky Right) 的 Outlined 按钮组 (详情, 编辑, 删除) -->
+              <template v-else-if="col.key === 'actions'">
+                <div class="flex items-center justify-center gap-1.5 shrink-0" @click.stop>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="h-7 px-2.5 rounded-md text-xs font-semibold text-blue-600 border-blue-200 hover:bg-blue-50 hover:border-blue-300 dark:border-blue-800 dark:text-blue-400"
+                    @click="openDetail(row)"
                   >
-                    <span class="url-text">{{ row.url }}</span>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide-ext-link">
-                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                      <polyline points="15 3 21 3 21 9"></polyline>
-                      <line x1="10" y1="14" x2="21" y2="3"></line>
-                    </svg>
-                  </a>
-                  <span v-else>-</span>
-                </template>
+                    详情
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="h-7 px-2.5 rounded-md text-xs font-semibold text-slate-700 border-slate-200 hover:bg-slate-100 hover:text-slate-900 dark:border-slate-700 dark:text-slate-200"
+                    @click="openEdit(row)"
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    class="h-7 px-2.5 rounded-md text-xs font-semibold text-red-600 border-red-200 hover:bg-red-50 hover:border-red-300 dark:border-red-900 dark:text-red-400"
+                    @click="openDeleteConfirm(row)"
+                  >
+                    删除
+                  </Button>
+                </div>
+              </template>
 
-                <!-- 默认文字 -->
-                <template v-else>
-                  {{ cellValue(row, col.key, rowIndex + 1) }}
-                </template>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+              <!-- 默认文字 -->
+              <template v-else>
+                {{ cellValue(row, col.key, rowIndex + 1) }}
+              </template>
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    </div>
+
+    <!-- 2. 独立分页控制卡片 (与表格解耦，避免阻塞横向滚动条) -->
+    <div class="pagination-card-container flex items-center justify-between px-5 py-3 rounded-xl border border-slate-200/80 dark:border-slate-800 shadow-sm bg-card text-xs text-slate-500 shrink-0">
+      <div class="footer-stat text-xs text-slate-500">
+        当前显示 <strong>{{ total === 0 ? 0 : (page - 1) * pageSize + 1 }}-{{ Math.min(page * pageSize, total) }}</strong> / 共 <strong class="text-slate-800 dark:text-slate-200">{{ total }}</strong> 条记录
+        <span v-if="selectedRowIds.length > 0" class="ml-2 text-pink-600 font-semibold">(已选中 {{ selectedRowIds.length }} 项)</span>
       </div>
 
-      <!-- 底部 Footer Page Control Bar -->
-      <div class="table-footer">
-        <div class="footer-stat">
-          当前显示 <strong>{{ total === 0 ? 0 : (page - 1) * pageSize + 1 }}-{{ Math.min(page * pageSize, total) }}</strong> / 共 <strong>{{ total }}</strong> 条 · 字段 <strong>{{ visibleColumns.length }}/{{ totalColumns }}</strong> 列
-        </div>
-
-        <div class="footer-pagination">
-          <span class="page-label">每页</span>
-          <select v-model.number="pageSize" @change="changePageSize" class="page-select">
+      <div class="footer-pagination flex items-center gap-4">
+        <div class="flex items-center gap-1.5 text-xs text-slate-500">
+          <span>每页条数</span>
+          <select v-model.number="pageSize" @change="changePageSize" class="page-select text-xs h-7 border rounded px-2 bg-background font-medium">
             <option :value="20">20</option>
             <option :value="50">50</option>
             <option :value="100">100</option>
           </select>
-
-          <div class="page-nav">
-            <button class="nav-btn" :disabled="page <= 1" @click="goPage(page - 1)">&lt;</button>
-            <span class="page-curr"><strong>{{ page }}</strong> / {{ totalPages }}</span>
-            <button class="nav-btn" :disabled="page >= totalPages" @click="goPage(page + 1)">&gt;</button>
-          </div>
         </div>
+
+        <Pagination
+          :total="total"
+          :items-per-page="pageSize"
+          :page="page"
+          @update:page="goPage"
+        >
+          <PaginationList class="flex items-center gap-1">
+            <PaginationFirst @click="goPage(1)" :disabled="page <= 1" />
+            <PaginationPrev @click="goPage(page - 1)" :disabled="page <= 1" />
+            <span class="text-xs px-2 font-medium">第 <strong>{{ page }}</strong> 页，共 {{ totalPages }} 页</span>
+            <PaginationNext @click="goPage(page + 1)" :disabled="page >= totalPages" />
+            <PaginationLast @click="goPage(totalPages)" :disabled="page >= totalPages" />
+          </PaginationList>
+        </Pagination>
       </div>
     </div>
 
-    <!-- Modal 弹窗 -->
-    <div class="modal-overlay" v-if="showColumnModal" @click.self="showColumnModal = false">
-      <div class="modal-card column-two-col-modal">
-        <div class="modal-header">
-          <div class="header-left">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2.5"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"/></svg>
-            <h3>列显示与隐藏设置</h3>
-            <span class="visible-badge">显示 {{ visibleColumns.length }} / {{ totalColumns }} 列</span>
-          </div>
-          <button class="close-btn" @click="showColumnModal = false">✕</button>
-        </div>
+    <!-- 抽离到 custom/ 目录下的专业 Modal 公共业务组件 -->
+    <ColumnConfigModal
+      v-model:open="showColumnModal"
+      :columns="columns"
+      @save="showColumnModal = false"
+    />
 
-        <!-- 快捷操作栏 -->
-        <div class="modal-sub-bar">
-          <div class="quick-btns">
-            <button class="btn-sub" @click="selectAllColumns">全选所有字段</button>
-            <button class="btn-sub" @click="invertColumns">反选</button>
-            <button class="btn-sub outline" @click="resetDefaultColumns">重置默认</button>
-          </div>
-          <span class="hint-text">💡 勾选决定表格是否展示该数据列</span>
-        </div>
+    <ExportModal
+      v-model:open="showExportModal"
+      :selected-count="selectedRowIds.length"
+      :total="total"
+      @export="executeExport"
+    />
 
-        <!-- scroll-area 滚动区域 (不分类，2列卡片网格) -->
-        <div class="scroll-area">
-          <div class="two-col-grid">
-            <label
-              v-for="col in columns"
-              :key="col.key"
-              class="tile-card"
-              :class="{ active: col.visible }"
-            >
-              <input type="checkbox" v-model="col.visible" class="custom-checkbox" />
-              <span class="col-title">{{ col.title }}</span>
-              <span class="col-key">({{ col.key }})</span>
-            </label>
-          </div>
-        </div>
+    <ClearDataModal
+      v-model:open="showClearModal"
+      :selected-count="selectedRowIds.length"
+      :total="total"
+      :clearing="clearing"
+      @clear="executeClear"
+    />
 
-        <div class="modal-footer">
-          <div class="footer-left-info">
-            显示状态：已有 {{ visibleColumns.length }} 个字段勾选生效
-          </div>
-          <div class="footer-right-btns">
-            <button class="btn-cancel" @click="showColumnModal = false">关闭</button>
-            <button class="btn-confirm" @click="showColumnModal = false">保存当前配置</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <ShowDetailModal
+      v-model:open="showDetailModal"
+      :detail-row="detailRow"
+      :clean-poster-url="cleanPosterUrl"
+      :format-show-time="formatShowTime"
+      :parse-price-chips="parsePriceChips"
+      :status-badge-class="statusBadgeClass"
+      @open-preview="openPreview"
+      @open-external-url="openExternalUrl"
+    />
 
-    <!-- 极简导出选择确认 Modal -->
-    <div class="modal-overlay" v-if="showExportModal" @click.self="showExportModal = false">
-      <div class="modal-card export-simple-modal">
-        <div class="modal-header">
-          <div class="header-left">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            <h3>数据导出确认</h3>
-          </div>
-          <button class="close-btn" @click="showExportModal = false">✕</button>
-        </div>
+    <ShowEditModal
+      v-model:open="showEditModal"
+      :edit-row-data="editRowData"
+      @save="saveEdit"
+    />
 
-        <div class="export-simple-body">
-          <div class="export-single-text">
-            <template v-if="selectedRowIds.length > 0">
-              您当前勾选了 <strong class="count-pink">{{ selectedRowIds.length }}</strong> 条记录，包含筛选共 <strong class="count-blue">{{ total }}</strong> 条，请选择导出的范围：
-            </template>
-            <template v-else>
-              符合当前筛选条件的演出数据共 <strong class="count-blue">{{ total }}</strong> 条，确认导出 Excel 文件吗？
-            </template>
-          </div>
-        </div>
+    <SingleDeleteModal
+      v-model:open="showSingleDeleteModal"
+      :target-row="deleteTargetRow"
+      @confirm="confirmSingleDelete"
+    />
 
-        <div class="modal-footer simple-footer">
-          <button class="btn-cancel" @click="showExportModal = false">取消</button>
-          <div class="right-btn-group">
-            <button 
-              v-if="selectedRowIds.length > 0"
-              class="btn-export-action primary"
-              @click="executeExport('selected')"
-            >
-              导出勾选的 {{ selectedRowIds.length }} 条
-            </button>
-            <button 
-              class="btn-export-action outline"
-              @click="executeExport('all')"
-            >
-              导出全部 {{ total }} 条
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 清除数据确认 Modal -->
-    <div class="modal-overlay" v-if="showClearModal" @click.self="showClearModal = false">
-      <div class="modal-card export-simple-modal">
-        <div class="modal-header">
-          <div class="header-left">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#e5484d" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-            <h3>清除数据确认</h3>
-          </div>
-          <button class="close-btn" @click="showClearModal = false">✕</button>
-        </div>
-
-        <div class="export-simple-body">
-          <div class="export-single-text">
-            <template v-if="selectedRowIds.length > 0">
-              您当前勾选了 <strong class="count-pink">{{ selectedRowIds.length }}</strong> 条记录，包含筛选共 <strong class="count-blue">{{ total }}</strong> 条，请选择清除的范围：
-            </template>
-            <template v-else>
-              符合当前筛选条件的演出数据共 <strong class="count-blue">{{ total }}</strong> 条，请选择清除的范围：
-            </template>
-            <br /><br />
-            清除会连带删除对应的原始记录，此操作不可撤销、清除后需重新采集。城市预设和系统设置会保留。
-          </div>
-        </div>
-
-        <div class="modal-footer simple-footer">
-          <button class="btn-cancel" @click="showClearModal = false">取消</button>
-          <div class="right-btn-group">
-            <button
-              v-if="selectedRowIds.length > 0"
-              class="btn-export-action danger"
-              :disabled="clearing"
-              @click="executeClear('selected')"
-            >
-              清除勾选的 {{ selectedRowIds.length }} 条
-            </button>
-            <button
-              class="btn-export-action danger-outline"
-              :disabled="clearing"
-              @click="executeClear('filtered')"
-            >
-              清除筛选的 {{ total }} 条
-            </button>
-            <button
-              class="btn-export-action danger-outline"
-              :disabled="clearing"
-              @click="executeClear('all')"
-            >
-              清除全部
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 海报图片预览灯箱 -->
-    <transition name="preview-fade">
-      <div v-if="previewImage" class="preview-overlay" @click.self="closePreview">
-        <div class="preview-box">
-          <button class="preview-close" @click="closePreview">✕</button>
-          <img :src="previewImage" :alt="previewTitle" class="preview-img" />
-          <div v-if="previewTitle" class="preview-caption">{{ previewTitle }}</div>
-        </div>
-      </div>
-    </transition>
+    <ImagePreviewModal
+      :open="!!previewImage"
+      @update:open="(v) => { if (!v) closePreview() }"
+      :image-url="previewImage"
+      :title="previewTitle"
+    />
 
   </div>
 </template>
 
 <style scoped>
+/* 自定义表格滚动条：高度加粗(14px)且动态绑定系统主题色 var(--primary) */
+.custom-table-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 10px;
+}
+.custom-table-scrollbar::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 7px;
+}
+.dark .custom-table-scrollbar::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+.custom-table-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--primary, #eb4f9a);
+  border-radius: 7px;
+  border: 2px solid #f1f5f9;
+  transition: background-color 0.2s ease;
+}
+.dark .custom-table-scrollbar::-webkit-scrollbar-thumb {
+  border: 2px solid #1e293b;
+}
+.custom-table-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--primary-hover, #d83b87);
+}
+
+/* 关联系统主题色的动态按钮 */
+.btn-theme-primary {
+  background-color: var(--primary, #eb4f9a) !important;
+  color: #ffffff !important;
+  border: none !important;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.btn-theme-primary:hover {
+  background-color: var(--primary-hover, #d83b87) !important;
+  box-shadow: 0 4px 12px var(--primary-shadow, rgba(235, 79, 154, 0.3));
+}
+
 /* 海报缩略图（表格内） */
 .poster-thumb {
   width: 44px;
