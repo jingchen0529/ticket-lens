@@ -122,7 +122,7 @@ function formatSingleChip(val, index = 0) {
     text: text,
     tag,
     tagType,
-    isPrimary: index === 1
+    isPrimary: false
   }
 }
 
@@ -208,6 +208,23 @@ function cleanPosterUrl(url) {
   return s
 }
 
+// 文本清洗：大麦富化字段常混入 HTML 实体（&nbsp; &amp; 等）与残留标签，
+// 去标签 + 解实体 + 收敛空白，供详情档案区展示。
+function cleanText(val) {
+  if (val == null) return ''
+  let s = String(val)
+  s = s.replace(/<[^>]*>/g, ' ')            // 去 HTML 标签
+  s = s.replace(/&nbsp;/gi, ' ')
+       .replace(/&amp;/gi, '&')
+       .replace(/&lt;/gi, '<')
+       .replace(/&gt;/gi, '>')
+       .replace(/&quot;/gi, '"')
+       .replace(/&#39;|&apos;/gi, "'")
+       .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
+  s = s.replace(/[ \s]+/g, ' ').trim()  // 收敛空白（含 &nbsp; 转成的  ）
+  return s
+}
+
 function triggerToast(msg, type = 'success') {
   if (type === 'error' || type === 'destructive') toast.error(msg)
   else if (type === 'success') toast.success(msg)
@@ -264,7 +281,29 @@ const showDetailModal = ref(false)
 const detailRow = ref(null)
 
 function openDetail(row) {
-  detailRow.value = row
+  // payload 里 city / 场馆 / 富化字段都埋在 venue.* 与 extras.* 里，
+  // 顶层没有 city / venue_name / norm_venue 这些键。弹窗直接读顶层会取空，
+  // 所以这里复用列表页的 cellValue 映射，先拍平成规范对象再传给弹窗，
+  // 同时保留 sessions / price / poster_url / url 原样供票档聚合与海报使用。
+  detailRow.value = {
+    ...row,
+    title: cleanText(row.title),
+    city: cleanText(row.venue?.city),
+    venue_name: cleanText(row.venue?.name),
+    venue_address: cleanText(row.venue?.address),
+    norm_venue: cleanText(row.extras?.norm_venue || row.venue?.name),
+    norm_title: cleanText(normalizeTitle(row.title)),
+    district: cleanText(row.extras?.district),
+    subcategory: cleanText(row.extras?.subcategory),
+    troupe: cleanText(row.extras?.troupe || (row.artists && row.artists[0])),
+    group_city: cleanText(row.extras?.group_city || row.venue?.city),
+    organizer: cleanText(row.extras?.organizer),
+    organizer_city: cleanText(row.extras?.organizer_city || row.venue?.city),
+    performers: cleanText(formatPerformers(row)),
+    troupe_attr: cleanText(row.extras?.troupe_attr),
+    hk_mo_tw: cleanText(row.extras?.hk_mo_tw),
+    session_count: Array.isArray(row.sessions) ? row.sessions.length : (row.extras?.session_count || 1),
+  }
   showDetailModal.value = true
 }
 
@@ -1122,6 +1161,7 @@ defineExpose({ refresh, fetchShows, loadFacets })
       :clean-poster-url="cleanPosterUrl"
       :format-show-time="formatShowTime"
       :parse-price-chips="parsePriceChips"
+      :format-price-ladder="formatPriceLadder"
       :status-badge-class="statusBadgeClass"
       @open-preview="openPreview"
       @open-external-url="openExternalUrl"

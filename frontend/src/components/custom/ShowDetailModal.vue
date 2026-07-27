@@ -31,6 +31,10 @@ const props = defineProps({
     type: Function,
     required: true
   },
+  formatPriceLadder: {
+    type: Function,
+    required: true
+  },
   statusBadgeClass: {
     type: Function,
     required: true
@@ -139,8 +143,14 @@ function handleExternal(url) {
               <div class="flex items-center gap-2">
                 <span class="text-slate-500 w-12 shrink-0">场馆：</span>
                 <span class="font-medium text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                  {{ detailRow.city }} | {{ detailRow.norm_venue || detailRow.venue_name || '剧场' }}
+                  {{ [detailRow.city, detailRow.norm_venue || detailRow.venue_name].filter(Boolean).join(' | ') || '剧场' }}
                   <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 text-xs">📍</span>
+                </span>
+              </div>
+              <div v-if="detailRow.venue_address" class="flex items-start gap-2">
+                <span class="text-slate-500 w-12 shrink-0">地址：</span>
+                <span class="text-slate-600 dark:text-slate-300 text-xs leading-relaxed">
+                  {{ detailRow.venue_address }}
                 </span>
               </div>
               <div class="text-[11px] text-slate-400 flex items-center gap-1 pt-0.5">
@@ -166,7 +176,7 @@ function handleExternal(url) {
               <div class="flex items-start gap-2">
                 <span class="text-sm text-slate-500 w-12 shrink-0 pt-1.5">票档</span>
                 <div class="flex flex-wrap gap-2.5 flex-1">
-                  <template v-for="(chip, index) in parsePriceChips(detailRow.price)" :key="index">
+                  <template v-for="(chip, index) in parsePriceChips(formatPriceLadder(detailRow))" :key="index">
                     <div
                       v-if="chip.raw"
                       class="px-4 py-2 rounded-lg bg-slate-100/90 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200/80 font-mono text-xs shadow-2xs"
@@ -204,22 +214,34 @@ function handleExternal(url) {
         <!-- 下半部分：项目全量属性卡片档案 -->
         <div class="mt-6 border-t pt-4 space-y-3">
           <div class="text-xs font-bold text-slate-500 flex items-center justify-between">
-            <span>演出项目详细档案参数 (Full Meta Details)</span>
-            <span class="font-mono text-slate-400">ID: {{ detailRow.id }}</span>
+            <span>演出项目详细档案参数</span>
+            <span class="font-mono text-slate-400">编号：{{ detailRow.id }}</span>
           </div>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-50 dark:bg-slate-900/60 p-4 rounded-xl text-xs border border-slate-100 dark:border-slate-800">
-            <div><span class="text-slate-400">演出大类：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.category || '未分类' }}</span></div>
-            <div><span class="text-slate-400">二级分类：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.subcategory || '-' }}</span></div>
-            <div><span class="text-slate-400">演出团体：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.troupe || '-' }}</span></div>
-            <div><span class="text-slate-400">团体城市：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.group_city || '-' }}</span></div>
-            <div><span class="text-slate-400">主办单位：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.organizer || '-' }}</span></div>
-            <div><span class="text-slate-400">主办城市：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.organizer_city || '-' }}</span></div>
-            <div><span class="text-slate-400">主要演员：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.performers || '-' }}</span></div>
-            <div><span class="text-slate-400">院团属性：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.troupe_attr || '-' }}</span></div>
-            <div><span class="text-slate-400">港澳台属性：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.hk_mo_tw || '-' }}</span></div>
-            <div><span class="text-slate-400">总场次数：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.session_count || 1 }} 场</span></div>
-            <div><span class="text-slate-400">节假日：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.holiday || '无' }}</span></div>
-            <div><span class="text-slate-400">数据序号：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.seq }}</span></div>
+          <div class="bg-slate-50 dark:bg-slate-900/60 p-4 rounded-xl text-xs border border-slate-100 dark:border-slate-800 space-y-3">
+            <!-- 短字段：多列网格 -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-3">
+              <div><span class="text-slate-400">演出大类：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.category || '未分类' }}</span></div>
+              <div><span class="text-slate-400">二级分类：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.subcategory || '-' }}</span></div>
+              <div><span class="text-slate-400">演出团体：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.troupe || '-' }}</span></div>
+              <div><span class="text-slate-400">团体城市：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.group_city || '-' }}</span></div>
+              <div><span class="text-slate-400">主办城市：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.organizer_city || '-' }}</span></div>
+              <div><span class="text-slate-400">院团属性：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.troupe_attr || '-' }}</span></div>
+              <div><span class="text-slate-400">港澳台属性：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.hk_mo_tw || '-' }}</span></div>
+              <div><span class="text-slate-400">总场次数：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.session_count || 1 }} 场</span></div>
+              <div><span class="text-slate-400">节假日：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.holiday || '无' }}</span></div>
+              <div><span class="text-slate-400">数据序号：</span><span class="font-medium text-slate-800 dark:text-slate-200">{{ detailRow.seq }}</span></div>
+            </div>
+            <!-- 长字段：各自独占一行，正常换行 -->
+            <div class="flex flex-col gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+              <div class="flex gap-2">
+                <span class="text-slate-400 shrink-0">主办单位：</span>
+                <span class="font-medium text-slate-800 dark:text-slate-200 leading-relaxed break-words">{{ detailRow.organizer || '-' }}</span>
+              </div>
+              <div class="flex gap-2">
+                <span class="text-slate-400 shrink-0">主要演员：</span>
+                <span class="font-medium text-slate-800 dark:text-slate-200 leading-relaxed break-words">{{ detailRow.performers || '-' }}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
