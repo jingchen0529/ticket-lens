@@ -30,10 +30,14 @@ jobs:
             os: windows-latest
             rust_target: x86_64-pc-windows-msvc
             bundles: nsis
+          # bundles 必须带 app：createUpdaterArtifacts 只在打 app 目标时才产出
+          # macOS 的 updater 包（*.app.tar.gz + .sig）。只打 dmg 的话 Release 里
+          # 没有 darwin-aarch64 条目，latest.json 缺该平台，Mac 客户端 check()
+          # 直接报错 —— v1.0.4/v1.0.5 的「检查更新失败」就是这个原因。
           - label: macos-aarch64
             os: macos-14
             rust_target: aarch64-apple-darwin
-            bundles: dmg
+            bundles: app,dmg
           # Intel Mac（macos-13）暂时下掉：v1.0.1 时该 runner 排队 2.5 小时仍未分配，
           # 把整条流水线和 Release 一起堵死。Apple Silicon 已是主流，需要 Intel 包时
           # 再把下面三行放回 matrix 即可（构建本身是通的，只是拿不到机器）。
