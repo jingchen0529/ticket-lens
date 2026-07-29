@@ -294,6 +294,47 @@ const displayLogs = computed(() => {
 const showTaskDetailModal = ref(false)
 const currentSelectedTaskDetail = ref(null)
 
+const manualCaptchaModalOpen = ref(false)
+const dismissedManualCaptchaKey = ref('')
+const manualCaptchaAlertKey = computed(() => {
+  const alert = activeJob.value?.manual_captcha_required
+  if (!alert?.required) return ''
+  return alert.updated_at || `${activeJob.value?.id || ''}:${alert.provider || ''}:${alert.reason || ''}`
+})
+const manualCaptchaReason = computed(() => {
+  return activeJob.value?.manual_captcha_required?.reason || '冰拓打码连续 3 次未返回有效距离或解析错误，需要人工介入。'
+})
+
+watch(
+  manualCaptchaAlertKey,
+  (alertKey) => {
+    if (alertKey && alertKey !== dismissedManualCaptchaKey.value) {
+      manualCaptchaModalOpen.value = true
+    } else if (!alertKey) {
+      manualCaptchaModalOpen.value = false
+      dismissedManualCaptchaKey.value = ''
+    }
+  },
+  { immediate: true }
+)
+
+function dismissManualCaptchaModal() {
+  dismissedManualCaptchaKey.value = manualCaptchaAlertKey.value
+  manualCaptchaModalOpen.value = false
+}
+
+async function cancelCurrentCrawlFromModal() {
+  if (activeJob.value?.id) {
+    try {
+      await api.cancelCrawl(activeJob.value.id)
+      triggerToast('已成功提交取消操作', 'warn')
+    } catch (e) {
+      triggerToast(e.message || '取消任务失败', 'error')
+    }
+  }
+  dismissManualCaptchaModal()
+}
+
 function viewTaskDetail(task) {
   currentSelectedTaskDetail.value = task
   showTaskDetailModal.value = true
@@ -933,6 +974,43 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
 
         <DialogFooter class="pt-2 border-t">
           <Button variant="outline" class="w-full text-xs" @click="showTaskDetailModal = false">关闭窗口</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- 人工介入过验证码提示 Modal -->
+    <Dialog v-model:open="manualCaptchaModalOpen">
+      <DialogContent class="max-w-md p-6 rounded-2xl bg-white dark:bg-slate-950 border-amber-500/30">
+        <DialogHeader class="border-b pb-3">
+          <DialogTitle class="text-base font-bold flex items-center gap-2 text-amber-600 dark:text-amber-400">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>需要人工介入过验证</span>
+          </DialogTitle>
+        </DialogHeader>
+
+        <div class="py-4 space-y-3 text-sm">
+          <p class="text-slate-700 dark:text-slate-300 leading-relaxed font-medium">
+            {{ manualCaptchaReason }}
+          </p>
+          <div class="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-xl border border-amber-200/60 dark:border-amber-900/50 text-xs text-amber-800 dark:text-amber-300 space-y-1.5">
+            <div class="font-bold flex items-center gap-1.5">
+              <span>💡 操作指引：</span>
+            </div>
+            <ol class="list-decimal list-inside space-y-1 text-slate-600 dark:text-slate-400">
+              <li>请切换到已打开的 Playwright 浏览器窗口；</li>
+              <li>在网页中手动拖动滑块完成安全验证；</li>
+              <li>验证成功后，采集任务将自动恢复并继续运行。</li>
+            </ol>
+          </div>
+        </div>
+
+        <DialogFooter class="pt-3 border-t flex items-center justify-between gap-3">
+          <Button variant="outline" class="text-xs text-slate-500 hover:text-red-600" @click="cancelCurrentCrawlFromModal">
+            取消本次采集
+          </Button>
+          <Button class="text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold" @click="dismissManualCaptchaModal">
+            我知道了（前往浏览器）
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -2162,7 +2162,7 @@ async def solve_by_provider_offset(
     success_check: Callable[[], Awaitable[bool]] | None = None,
     payload_hint: CaptchaPayload | None = None,
     image_logic_width: float = 320.0,
-    max_rounds: int = 2,
+    max_rounds: int = 3,
     wait_timeout_s: float = 10.0,
 ) -> bool:
     """用国内/第三方打码拿到位移后，拟人拖动官方滑块。
@@ -2330,9 +2330,24 @@ async def solve_by_provider_offset(
 
             if raw_off is None:
                 logger.warning(
-                    "provider returned no offset (round=%s); "
-                    "stop paid attempts to avoid repeated charges",
-                    round_i,
+                    "provider returned no offset (round=%s/%s)",
+                    paid_attempts,
+                    max_rounds,
+                )
+                if paid_attempts < max_rounds:
+                    logger.warning(
+                        "provider returned no offset; refreshing captcha to retry (%s/%s)",
+                        paid_attempts,
+                        max_rounds,
+                    )
+                    payloads.clear()
+                    allow_hint = False
+                    await _click_refresh(page)
+                    await page.wait_for_timeout(1500)
+                    continue
+                logger.warning(
+                    "provider (bingtop) failed %s times consecutively without offset; stopping provider attempts",
+                    max_rounds,
                 )
                 return False
 
@@ -2660,7 +2675,7 @@ async def solve_fruit_slider(
     *,
     step: float = 5.0,
     success_check: Callable[[], Awaitable[bool]] | None = None,
-    max_rounds: int = 2,
+    max_rounds: int = 3,
     wait_timeout_s: float = 10.0,
     payload_hint: CaptchaPayload | None = None,
     provider: Any = None,

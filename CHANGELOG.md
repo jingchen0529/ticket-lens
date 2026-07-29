@@ -9,6 +9,18 @@
 
 ---
 
+## [1.0.9] - 2026-07-29
+
+### 新增
+- 冰拓连续识别失败时自动刷新验证码并按三次预算重试
+- 自动过码耗尽后向采集页发布人工介入状态，并弹出浏览器手动验证指引
+
+### 修复
+- 统一默认配置、设置保存和运行时的冰拓重试次数
+- 人工介入弹窗可稳定关闭，不会因任务状态轮询反复弹出
+
+---
+
 ## [1.0.8] - 2026-07-29
 
 ### 新增
@@ -77,6 +89,7 @@
 
 ---
 
-[Unreleased]: https://github.com/jingchen0529/ticket-lens/compare/v1.0.8...HEAD
+[Unreleased]: https://github.com/jingchen0529/ticket-lens/compare/v1.0.9...HEAD
+[1.0.9]: https://github.com/jingchen0529/ticket-lens/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/jingchen0529/ticket-lens/compare/v1.0.7...v1.0.8
 [0.1.0]: https://github.com/jingchen0529/ticket-lens/releases/tag/v0.1.0

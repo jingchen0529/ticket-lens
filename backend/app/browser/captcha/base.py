@@ -74,18 +74,43 @@ class CaptchaSolver(abc.ABC):
                 message="需要人工验证但当前为 headless，请使用 --headed",
             )
 
+        from app.services.crawl_jobs import get_job_manager
+
+        provider_name = str(getattr(getattr(self, "provider", None), "name", "") or "")
+        retry_limit = max(
+            1,
+            int(getattr(captcha_cfg, "fruit_max_rounds", 3) or 3),
+        )
+        reason = "验证码自动求解失败，需要人工介入"
+        if provider_name in ("bingtop", "冰拓"):
+            reason = (
+                f"冰拓打码连续 {retry_limit} 次未返回有效距离或解析错误，需要人工介入。"
+                "请在已打开的浏览器窗口中手动拖动滑块完成验证。"
+            )
+        elif provider_name:
+            reason = f"{provider_name} 打码连续失败，需要人工介入。请在已打开的浏览器窗口中手动拖动滑块完成验证。"
+
+        mgr = get_job_manager()
+        active_job = mgr.active
+        if active_job:
+            active_job.set_manual_captcha(reason=reason, provider=provider_name)
+
         self.log.warning(
             "[%s] 请在浏览器中手动完成验证（%s），最多等待 %ss …",
             self.platform,
             challenge.kind.value,
             wait_s,
         )
-        deadline = asyncio.get_event_loop().time() + wait_s
-        while asyncio.get_event_loop().time() < deadline:
-            await asyncio.sleep(1.5)
-            if await self.detect(page) is None:
-                return CaptchaSolveResult(ok=True, method="manual", message="manual cleared")
-        return CaptchaSolveResult(ok=False, method="manual", message="manual wait timeout")
+        try:
+            deadline = asyncio.get_event_loop().time() + wait_s
+            while asyncio.get_event_loop().time() < deadline:
+                await asyncio.sleep(1.5)
+                if await self.detect(page) is None:
+                    return CaptchaSolveResult(ok=True, method="manual", message="manual cleared")
+            return CaptchaSolveResult(ok=False, method="manual", message="manual wait timeout")
+        finally:
+            if active_job:
+                active_job.clear_manual_captcha()
 
     async def _confirm_cleared(self, page: Page, result: CaptchaSolveResult) -> bool:
         """二次确认自动求解结果；平台可按自己的可见 UI 语义覆盖。"""

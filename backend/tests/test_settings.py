@@ -40,7 +40,7 @@ def test_saving_bingtop_credentials_enables_provider_first(monkeypatch, tmp_path
 
     assert result["success"] is True
     assert saved["captcha"]["fruit_strategy"] == "provider_first"
-    assert saved["captcha"]["fruit_max_rounds"] == 1
+    assert saved["captcha"]["fruit_max_rounds"] == 3
 
 
 async def test_bingtop_balance_uses_bundled_ca_without_environment(monkeypatch):

@@ -75,15 +75,29 @@ async def test_provider_preparation_attempts_are_bounded_without_paid_call(monke
 
 
 @pytest.mark.asyncio
-async def test_provider_none_stops_batch_after_unpaid_preparation_retry(monkeypatch):
+async def test_provider_none_refreshes_and_retries_up_to_paid_budget(monkeypatch):
     geo = SimpleNamespace(
         max_slide=272.0,
         image_box={"width": 320.0},
         track_box={"width": 320.0},
         button_box={"width": 48.0},
     )
-    geometry = AsyncMock(side_effect=[None, geo])
+    geometry = AsyncMock(return_value=geo)
     page = _patch_provider_loop(monkeypatch, geometry=geometry)
+
+    payload_count = [0]
+    async def fake_attach_payload(_page, sink):
+        page._sink = sink
+        return lambda: None
+
+    async def fake_click_refresh(_page):
+        payload_count[0] += 1
+        if hasattr(page, "_sink") and page._sink is not None:
+            page._sink.append(_payload(100 + payload_count[0]))
+
+    monkeypatch.setattr(fruit_slider, "attach_payload_listener", fake_attach_payload)
+    monkeypatch.setattr(fruit_slider, "_click_refresh", fake_click_refresh)
+
     provider = SimpleNamespace(
         fruit_type=1358,
         DUAL_IMAGE_TYPES=frozenset({1358}),
@@ -94,13 +108,12 @@ async def test_provider_none_stops_batch_after_unpaid_preparation_retry(monkeypa
         page,
         provider,
         payload_hint=_payload(100),
-        max_rounds=4,
+        max_rounds=3,
         wait_timeout_s=0,
     )
 
     assert solved is False
-    assert geometry.await_count == 2
-    provider.solve_fruit_offset.assert_awaited_once()
+    assert provider.solve_fruit_offset.call_count == 3
 
 
 @pytest.mark.asyncio

@@ -98,7 +98,7 @@ class DamaiCaptchaSolver(CaptchaSolver):
         self.scan_step = float(getattr(captcha_cfg, "fruit_scan_step", 5) or 5)
         self.fruit_max_rounds = max(
             1,
-            min(5, int(getattr(captcha_cfg, "fruit_max_rounds", 1) or 1)),
+            min(5, int(getattr(captcha_cfg, "fruit_max_rounds", 3) or 3)),
         )
         self.fruit_strategy = str(
             getattr(captcha_cfg, "fruit_strategy", "provider_first") or "provider_first"

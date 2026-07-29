@@ -47,7 +47,7 @@ class CaptchaConfig(BaseModel):
     # 水果滑块扫描步长（像素），越小越准越慢
     fruit_scan_step: float = 4.0
     # 单次自动求解最多提交多少道新题，限制付费识别预算
-    fruit_max_rounds: int = Field(default=1, ge=1, le=5)
+    fruit_max_rounds: int = Field(default=3, ge=1, le=5)
     # 通过验证后保存 cookie，下次少弹验证码
     persist_cookies: bool = True
     cookie_dir: str = "data/cookies"

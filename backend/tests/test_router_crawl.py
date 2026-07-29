@@ -218,3 +218,24 @@ async def test_cancel(monkeypatch):
     await asyncio.sleep(0.05)
     assert rec.state.value == "cancelled"
     assert mgr.active is None
+
+
+def test_manual_captcha_status():
+    import app.services.crawl_jobs as cj
+
+    job = CrawlJob(sources=[SourcePlatform.DAMAI], cities=["北京"], max_pages=1)
+    rec = cj.JobRecord(id="test-job-123", job=job)
+
+    assert rec.manual_captcha_required is None
+    assert rec.to_dict()["manual_captcha_required"] is None
+
+    rec.set_manual_captcha("冰拓打码连续 3 次未返回有效距离，需要人工介入", "bingtop")
+    assert rec.manual_captcha_required is not None
+    assert rec.manual_captcha_required["required"] is True
+    assert rec.manual_captcha_required["provider"] == "bingtop"
+    assert "冰拓打码" in rec.manual_captcha_required["reason"]
+    assert rec.to_dict()["manual_captcha_required"] == rec.manual_captcha_required
+
+    rec.clear_manual_captcha()
+    assert rec.manual_captcha_required is None
+    assert rec.to_dict()["manual_captcha_required"] is None

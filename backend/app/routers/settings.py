@@ -91,7 +91,7 @@ def update_settings(req: SettingsData) -> dict:
             # 自动模式首题直接交给冰拓；冰拓未返回有效距离时再走免费的
             # 本地算法兜底，避免直接中止或再次调用付费接口。
             cfg_data["captcha"]["fruit_strategy"] = "provider_first"
-            cfg_data["captcha"]["fruit_max_rounds"] = 1
+            cfg_data["captcha"]["fruit_max_rounds"] = 3
 
         # 同步水果滑块类型
         cfg_data["captcha"]["fruit_captcha_type"] = req.fruit_captcha_type

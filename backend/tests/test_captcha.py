@@ -1,9 +1,11 @@
 """验证码轨迹与配置合并。"""
 
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.browser.captcha import base as captcha_base
 from app.browser.captcha.base import CaptchaChallenge, CaptchaKind
 from app.browser.captcha.human_track import distance_candidates, generate_slider_track
 from app.core.config import (
@@ -81,8 +83,55 @@ def test_damai_solver_builds_provider():
 def test_solvers_are_platform_specific():
     cfg = AppConfig()
     assert cfg.captcha.fruit_strategy == "provider_first"
+    assert cfg.captcha.fruit_max_rounds == 3
     assert DamaiCaptchaSolver(cfg).platform == "damai"
     assert MaoyanCaptchaSolver(cfg).platform == "maoyan"
+
+
+@pytest.mark.asyncio
+async def test_manual_solver_publishes_and_clears_intervention_status(monkeypatch):
+    import app.services.crawl_jobs as crawl_jobs
+
+    class DummySolver(captcha_base.CaptchaSolver):
+        platform = "dummy"
+
+        async def detect(self, page):
+            return None
+
+        async def solve_auto(self, page, challenge):
+            raise AssertionError("manual test must not call auto solver")
+
+    record = SimpleNamespace(
+        set_manual_captcha=MagicMock(),
+        clear_manual_captcha=MagicMock(),
+    )
+    monkeypatch.setattr(
+        crawl_jobs,
+        "get_job_manager",
+        lambda: SimpleNamespace(active=record),
+    )
+    monkeypatch.setattr(captcha_base.asyncio, "sleep", AsyncMock())
+    solver = DummySolver(
+        SimpleNamespace(
+            captcha=SimpleNamespace(
+                manual_wait_seconds=1,
+                fruit_max_rounds=3,
+            ),
+            browser=SimpleNamespace(headless=False),
+        )
+    )
+    solver.provider = SimpleNamespace(name="bingtop")
+
+    result = await solver.solve_manual(
+        object(),
+        CaptchaChallenge(kind=CaptchaKind.SLIDER),
+    )
+
+    assert result.ok is True
+    record.set_manual_captcha.assert_called_once()
+    assert "连续 3 次" in record.set_manual_captcha.call_args.kwargs["reason"]
+    assert record.set_manual_captcha.call_args.kwargs["provider"] == "bingtop"
+    record.clear_manual_captcha.assert_called_once()
 
 
 @pytest.mark.asyncio

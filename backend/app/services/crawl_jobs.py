@@ -97,8 +97,23 @@ class JobRecord:
     error: str = ""
     # 引擎/验证码阶段日志（前端 Console 轮询展示）
     logs: list[dict[str, str]] = field(default_factory=list)
+    # 人工介入过验证提示状态（自动求解耗尽后触发）
+    manual_captcha_required: Optional[dict[str, Any]] = None
     # 后台 asyncio 任务句柄，用于取消
     _task: Optional[asyncio.Task] = field(default=None, repr=False)
+
+    def set_manual_captcha(self, reason: str = "", provider: str = "") -> None:
+        """设置需要人工介入验证的状态"""
+        self.manual_captcha_required = {
+            "required": True,
+            "reason": reason or "验证码自动破解失败，请在浏览器中手动拖动滑块",
+            "provider": provider,
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+
+    def clear_manual_captcha(self) -> None:
+        """清除人工介入验证状态"""
+        self.manual_captcha_required = None
 
     def append_log(self, level: str, text: str) -> None:
         """追加一条可展示日志；超出上限丢弃最旧条目。"""
@@ -128,6 +143,7 @@ class JobRecord:
             "error": self.error,
             "result": self._result_summary(),
             "logs": list(self.logs),
+            "manual_captcha_required": self.manual_captcha_required,
         }
 
     def _result_summary(self) -> Optional[dict[str, Any]]:

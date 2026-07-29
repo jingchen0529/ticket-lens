@@ -11,7 +11,7 @@ captcha:
   auto: true
   cookie_dir: data/cookies
   fruit_captcha_type: 1358
-  fruit_max_rounds: 1
+  fruit_max_rounds: 3
   fruit_scan_step: 5
   fruit_strategy: provider_first
   manual_wait_seconds: 120
