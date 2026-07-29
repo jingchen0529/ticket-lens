@@ -354,9 +354,10 @@ class BingtopProvider(CaptchaProvider):
             return None
         if str(rec).strip().lower() in {"error", "fail", "failed", "null", "none"}:
             logger.warning(
-                "bingtop recognition error type=%s url=%s response=%s",
+                "bingtop recognition error type=%s url=%s recognition=%r response=%s",
                 captcha_type,
                 url,
+                str(rec)[:40],
                 self._safe_response_meta(body),
             )
             return None

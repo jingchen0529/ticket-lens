@@ -9,6 +9,7 @@ import orjson
 
 from app.core.cities import seed_cities_table
 from app.models import CrawlResult, RawShowItem, Show
+from app.pipeline.normalize import split_show_by_sessions
 from app.repositories.storage.base import Storage
 
 _SCHEMA = """
@@ -75,6 +76,18 @@ class SqliteStorage(Storage):
         return self._root
 
     def save_raw(self, items: list[RawShowItem]) -> Path:
+        # 同一批内也先去重。旧实现只先 DELETE 再批量 INSERT；若批次本身含
+        # 4 个相同项目，仍会一次插入 4 行。
+        seen: set[tuple[str, str]] = set()
+        unique_reversed: list[RawShowItem] = []
+        for item in reversed(items):
+            if item.source_id:
+                key = (item.source.value, item.source_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+            unique_reversed.append(item)
+        unique_items = list(reversed(unique_reversed))
         rows = [
             (
                 i.source.value,
@@ -83,7 +96,7 @@ class SqliteStorage(Storage):
                 orjson.dumps(i.model_dump(mode="json")).decode(),
                 i.crawled_at.isoformat() if i.crawled_at else None,
             )
-            for i in items
+            for i in unique_items
         ]
         # 去重：raw_items 原来是纯 INSERT，每次采集无脑追加，同一 (source, source_id)
         # 会重复堆积、库无限膨胀。改为「先删同键旧行再插」，与 shows 的 upsert 口径一致。
@@ -102,11 +115,23 @@ class SqliteStorage(Storage):
         # 同步一份 JSON 方便查看
         json_path = self._root / "raw_items.json"
         json_path.write_bytes(
-            orjson.dumps([i.model_dump(mode="json") for i in items], option=orjson.OPT_INDENT_2)
+            orjson.dumps(
+                [i.model_dump(mode="json") for i in unique_items],
+                option=orjson.OPT_INDENT_2,
+            )
         )
         return json_path
 
     def save_shows(self, shows: list[Show]) -> Path:
+        # 存储边界再兜底一次：调用方即使传入尚未拆分的聚合 Show，也必须按
+        # sessions 展开，不能把“接口返回一次”误当成“一条展示记录”。
+        split_shows: list[Show] = []
+        for show in shows:
+            if len(show.sessions) > 1:
+                split_shows.extend(split_show_by_sessions(show))
+            else:
+                split_shows.append(show)
+        shows = split_shows
         rows = []
         for s in shows:
             rows.append(

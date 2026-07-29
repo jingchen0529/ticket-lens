@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+
+import pytest
 
 from app.crawlers.damai.detail import (
     apply_detail_to_raw,
@@ -118,3 +119,37 @@ def test_parse_description_sections_troupe_and_artists():
     assert "俞峰" in p["performers"] or p["conductor"] == "俞峰"
     assert "广州交响乐团" in p["organizers"] or "星海音乐厅" in p["organizers"]
     assert parse_price_text_to_ladder(p["price_text"]) == "80|180|280|680"
+
+
+@pytest.mark.asyncio
+async def test_enrich_items_emits_each_completed_detail_immediately(monkeypatch):
+    import app.crawlers.damai.detail as detail_module
+
+    events: list[str] = []
+
+    async def fake_enrich(_page, item, **_kwargs):
+        events.append(f"fetch:{item.source_id}")
+        item.sessions_raw = [
+            {
+                "id": f"session-{item.source_id}",
+                "start_time": "2026-08-01 19:30",
+                "date_key": "20260801",
+            }
+        ]
+        return item
+
+    async def on_item(item):
+        events.append(f"persist:{item.source_id}")
+
+    monkeypatch.setattr(detail_module, "enrich_item_detail", fake_enrich)
+    items = [
+        RawShowItem(source=SourcePlatform.DAMAI, source_id="1", title="A"),
+        RawShowItem(source=SourcePlatform.DAMAI, source_id="2", title="B"),
+    ]
+
+    out = await detail_module.enrich_items_detail(
+        object(), items, delay_s=0, on_item=on_item
+    )
+
+    assert [item.source_id for item in out] == ["1", "2"]
+    assert events == ["fetch:1", "persist:1", "fetch:2", "persist:2"]

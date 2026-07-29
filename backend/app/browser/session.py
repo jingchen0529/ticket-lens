@@ -76,7 +76,7 @@ class BrowserSession:
         # Provider-only solving does not need the SecCaptcha updatePos hook.
         # Avoid mutating page globals before the official fingerprint is built.
         fruit_strategy = str(
-            getattr(self.captcha_config, "fruit_strategy", "local_first") or "local_first"
+            getattr(self.captcha_config, "fruit_strategy", "provider_first") or "provider_first"
         ).lower()
         if fruit_strategy != "provider_only":
             await self._context.add_init_script(

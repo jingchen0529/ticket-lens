@@ -11,9 +11,9 @@ captcha:
   auto: true
   cookie_dir: data/cookies
   fruit_captcha_type: 1358
-  fruit_max_rounds: 2
+  fruit_max_rounds: 1
   fruit_scan_step: 5
-  fruit_strategy: local_first
+  fruit_strategy: provider_first
   manual_wait_seconds: 120
   password: ''  # 在应用"系统设置"页面配置
   persist_cookies: true

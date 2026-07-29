@@ -8,6 +8,7 @@ from pathlib import Path
 import orjson
 
 from app.models import CrawlResult, RawShowItem, Show
+from app.pipeline.normalize import split_show_by_sessions
 from app.repositories.storage.base import Storage
 
 
@@ -32,7 +33,14 @@ class JsonStorage(Storage):
 
     def save_shows(self, shows: list[Show]) -> Path:
         path = self._root / "shows.json"
-        data = [s.model_dump(mode="json") for s in shows]
+        split_shows = [
+            part
+            for show in shows
+            for part in (
+                split_show_by_sessions(show) if len(show.sessions) > 1 else [show]
+            )
+        ]
+        data = [s.model_dump(mode="json") for s in split_shows]
         path.write_bytes(_dump(data))
         return path
 

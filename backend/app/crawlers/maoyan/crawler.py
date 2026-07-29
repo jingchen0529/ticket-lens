@@ -20,7 +20,7 @@ from urllib.parse import quote, urlencode
 from playwright.async_api import Page, Response
 
 from app.browser.captcha.base import CaptchaSolver
-from app.crawlers.base import BaseCrawler
+from app.crawlers.base import BaseCrawler, ItemCallback
 from app.crawlers.maoyan.captcha import MaoyanCaptchaSolver
 from app.models import RawShowItem, SourcePlatform
 from app.utils.text import clean_text
@@ -53,8 +53,10 @@ class MaoyanCrawler(BaseCrawler):
         cities: Sequence[str],
         keywords: Sequence[str],
         max_pages: int,
+        on_item: ItemCallback | None = None,
     ) -> list[RawShowItem]:
         items: list[RawShowItem] = []
+        seen_projects: set[str] = set()
         kw_list = list(keywords) if keywords else [""]
 
         async with self.session.page() as page:
@@ -65,7 +67,14 @@ class MaoyanCrawler(BaseCrawler):
                         "maoyan crawl city=%s keyword=%r pages=%s", city, keyword, pages_label
                     )
                     page_items = await self._crawl_city_keyword(page, city, keyword, max_pages)
-                    items.extend(page_items)
+                    for item in page_items:
+                        key = item.source_id or item.url
+                        if key and key in seen_projects:
+                            continue
+                        if key:
+                            seen_projects.add(key)
+                        items.append(item)
+                        await self._emit_item(item, on_item)
                     await self._delay()
 
         self.log.info("maoyan done raw=%s", len(items))

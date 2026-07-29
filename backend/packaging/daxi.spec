@@ -7,7 +7,7 @@
 
 import os
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
 
 # SPECPATH 是 PyInstaller 注入的变量，指向本 spec 文件所在目录（packaging/）。
 # backend 根目录是它的上一级。所有数据/入口都用绝对路径，避免相对 CWD 出错。
@@ -23,6 +23,10 @@ for pkg in ("playwright",):
     datas += d
     binaries += b
     hiddenimports += h
+
+# httpx 的 HTTPS 校验固定使用 certifi.where()，显式收集 CA 文件以保证
+# onedir 打包产物中始终存在 certifi/cacert.pem。
+datas += collect_data_files("certifi")
 
 # uvicorn / fastapi 动态加载的子模块
 hiddenimports += collect_submodules("uvicorn")

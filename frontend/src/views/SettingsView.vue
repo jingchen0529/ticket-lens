@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, nextTick, ref, onMounted, watch } from 'vue'
 import { api, IN_TAURI } from '../api.js'
 import { checkForUpdate, downloadAndInstall } from '../updater.js'
 import { Button } from '@/components/ui/button'
@@ -22,8 +22,18 @@ const activeTab = ref('all')
 // 冰拓账号与密码
 const bingtuoUser = ref('')
 const bingtuoPass = ref('')
+const savedBingtuoUser = ref('')
+const savedBingtuoPass = ref('')
 const fruitCaptchaType = ref('1358')
 const showPassword = ref(false)
+const hasCompleteBingtuoCredentials = computed(
+  () => Boolean(bingtuoUser.value.trim() && bingtuoPass.value.trim())
+)
+const hasSavedBingtuoCredentials = computed(
+  () => hasCompleteBingtuoCredentials.value &&
+    bingtuoUser.value === savedBingtuoUser.value &&
+    bingtuoPass.value === savedBingtuoPass.value
+)
 
 // 过码模式：auto=自动过码（打码平台/本地，失败人工兜底）| manual=手动过码（直接弹窗人工拖滑块）
 const captchaMode = ref('auto')
@@ -35,6 +45,18 @@ const balanceLoading = ref(false)
 
 async function checkBalance() {
   if (balanceLoading.value) return
+  if (!hasCompleteBingtuoCredentials.value) {
+    balance.value = null
+    balanceError.value = '请先填写并保存冰拓账号和密码'
+    toast.warn(balanceError.value)
+    return
+  }
+  if (!hasSavedBingtuoCredentials.value) {
+    balance.value = null
+    balanceError.value = '账号或密码尚未保存，请先保存设置'
+    toast.warn(balanceError.value)
+    return
+  }
   balanceLoading.value = true
   balanceError.value = ''
   try {
@@ -103,6 +125,8 @@ async function loadSettings() {
     if (data.bingtuo) {
       bingtuoUser.value = data.bingtuo.username || ''
       bingtuoPass.value = data.bingtuo.password || ''
+      savedBingtuoUser.value = bingtuoUser.value
+      savedBingtuoPass.value = bingtuoPass.value
     }
     if (data.fruit_captcha_type) {
       fruitCaptchaType.value = String(data.fruit_captcha_type)
@@ -133,6 +157,8 @@ async function saveAllSettings() {
       theme_color: customHex.value,
       captcha_mode: captchaMode.value
     })
+    savedBingtuoUser.value = bingtuoUser.value
+    savedBingtuoPass.value = bingtuoPass.value
   } catch (e) {
     console.error('保存设置失败:', e)
     toast.error('保存同步到后端失败: ' + (e.message || '网络连接异常'))
@@ -149,6 +175,7 @@ const updateVersion = ref('')
 const updateNotes = ref('')
 const updateProgress = ref(0)
 const updateError = ref('')
+const updateSectionRef = ref(null)
 let pendingUpdate = null
 
 async function handleCheckUpdate() {
@@ -183,12 +210,33 @@ async function handleInstallUpdate() {
   }
 }
 
-onMounted(async () => {
-  await loadSettings()
-  if (bingtuoUser.value && bingtuoPass.value) {
-    checkBalance()
+async function openUpdatePanel(detectedUpdate = null) {
+  activeTab.value = 'update'
+  if (
+    detectedUpdate &&
+    ['idle', 'uptodate', 'error'].includes(updateState.value)
+  ) {
+    pendingUpdate = detectedUpdate
+    updateVersion.value = detectedUpdate.version || ''
+    updateNotes.value = detectedUpdate.body || ''
+    updateError.value = ''
+    updateState.value = 'available'
   }
+  await nextTick()
+  updateSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  if (['idle', 'uptodate', 'error'].includes(updateState.value)) {
+    await handleCheckUpdate()
+  }
+}
+
+watch([bingtuoUser, bingtuoPass], () => {
+  balance.value = null
+  balanceError.value = ''
 })
+
+onMounted(loadSettings)
+
+defineExpose({ openUpdatePanel })
 </script>
 
 <template>
@@ -496,7 +544,7 @@ onMounted(async () => {
         </div>
 
         <!-- 4. 软件版本更新 (仅 Tauri 桌面环境) 卡片 -->
-        <div v-if="IS_TAURI" v-show="activeTab === 'all' || activeTab === 'update'" class="setting-card bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-5 shadow-2xs space-y-4">
+        <div ref="updateSectionRef" v-if="IS_TAURI" v-show="activeTab === 'all' || activeTab === 'update'" class="setting-card bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-5 shadow-2xs space-y-4">
           <div class="card-header pb-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
             <div>
               <h3 class="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">

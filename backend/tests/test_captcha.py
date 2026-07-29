@@ -14,6 +14,7 @@ from app.core.config import (
     SourcesConfig,
 )
 from app.crawlers.damai.captcha import DamaiCaptchaSolver
+from app.crawlers.damai.fruit_slider import solve_fruit_slider
 from app.crawlers.maoyan.captcha import MaoyanCaptchaSolver
 
 
@@ -79,8 +80,50 @@ def test_damai_solver_builds_provider():
 
 def test_solvers_are_platform_specific():
     cfg = AppConfig()
+    assert cfg.captcha.fruit_strategy == "provider_first"
     assert DamaiCaptchaSolver(cfg).platform == "damai"
     assert MaoyanCaptchaSolver(cfg).platform == "maoyan"
+
+
+@pytest.mark.asyncio
+async def test_default_fruit_strategy_calls_provider_before_local():
+    page = AsyncMock()
+    provider = object()
+    with (
+        patch(
+            "app.crawlers.damai.fruit_slider.solve_by_provider_offset",
+            AsyncMock(return_value=True),
+        ) as provider_solve,
+        patch(
+            "app.crawlers.damai.fruit_slider._solve_fruit_slider_local",
+            AsyncMock(side_effect=AssertionError("local must not consume the first puzzle")),
+        ) as local_solve,
+    ):
+        assert await solve_fruit_slider(page, provider=provider) is True
+
+    provider_solve.assert_awaited_once()
+    local_solve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provider_first_falls_back_to_free_local_solver():
+    page = AsyncMock()
+    provider = object()
+    with (
+        patch(
+            "app.crawlers.damai.fruit_slider.solve_by_provider_offset",
+            AsyncMock(return_value=False),
+        ) as provider_solve,
+        patch(
+            "app.crawlers.damai.fruit_slider._solve_fruit_slider_local",
+            AsyncMock(return_value=True),
+        ) as local_solve,
+    ):
+        assert await solve_fruit_slider(page, provider=provider) is True
+
+    provider_solve.assert_awaited_once()
+    local_solve.assert_awaited_once()
+    assert local_solve.await_args.kwargs["payload_hint"] is None
 
 
 @pytest.mark.asyncio

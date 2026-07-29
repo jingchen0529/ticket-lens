@@ -2330,7 +2330,8 @@ async def solve_by_provider_offset(
 
             if raw_off is None:
                 logger.warning(
-                    "provider returned no offset (round=%s); stop batch to avoid repeated charges",
+                    "provider returned no offset (round=%s); "
+                    "stop paid attempts to avoid repeated charges",
                     round_i,
                 )
                 return False
@@ -2663,7 +2664,7 @@ async def solve_fruit_slider(
     wait_timeout_s: float = 10.0,
     payload_hint: CaptchaPayload | None = None,
     provider: Any = None,
-    strategy: str = "local_first",
+    strategy: str = "provider_first",
 ) -> bool:
     """求解水果滑块。
 
@@ -2672,7 +2673,7 @@ async def solve_fruit_slider(
       - provider_first: 打码优先，失败回退本地
       - local_only / provider_only
     """
-    strategy = (strategy or "local_first").lower().strip()
+    strategy = (strategy or "provider_first").lower().strip()
     use_local = strategy in ("local_first", "provider_first", "local_only", "")
     use_provider = provider is not None and strategy in (
         "local_first",

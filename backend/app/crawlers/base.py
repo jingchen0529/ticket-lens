@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import inspect
 import logging
-from typing import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 from playwright.async_api import Page
 
@@ -20,6 +21,8 @@ from app.core.config import AppConfig
 from app.models import RawShowItem, SourcePlatform
 
 logger = logging.getLogger(__name__)
+
+ItemCallback = Callable[[RawShowItem], Awaitable[None] | None]
 
 
 class BaseCrawler(abc.ABC):
@@ -42,8 +45,17 @@ class BaseCrawler(abc.ABC):
         cities: Sequence[str],
         keywords: Sequence[str],
         max_pages: int,
+        on_item: ItemCallback | None = None,
     ) -> list[RawShowItem]:
         """执行采集，返回平台原始条目。"""
+
+    async def _emit_item(self, item: RawShowItem, on_item: ItemCallback | None) -> None:
+        """把完整条目交给编排层；回调可同步也可异步。"""
+        if on_item is None:
+            return
+        result = on_item(item)
+        if inspect.isawaitable(result):
+            await result
 
     async def goto(self, page: Page, url: str, *, wait_until: str = "domcontentloaded") -> None:
         """导航并自动处理本平台验证码。"""

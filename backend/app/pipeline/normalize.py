@@ -32,6 +32,28 @@ _STATUS_MAP: list[tuple[tuple[str, ...], ShowStatus]] = [
 ]
 
 
+def _parse_session_start(raw_session: dict) -> datetime | None:
+    """解析场次时间；大麦 dateKey 是日期权威值，名称只用于补时分。"""
+    raw_time = str(
+        raw_session.get("start_time")
+        or raw_session.get("time")
+        or raw_session.get("showTime")
+        or raw_session.get("name")
+        or ""
+    )
+    date_key = re.sub(r"\D", "", str(raw_session.get("date_key") or ""))
+    if len(date_key) == 8:
+        try:
+            base = datetime.strptime(date_key, "%Y%m%d")
+            tm = re.search(r"(?<!\d)([01]?\d|2[0-3])[:：]([0-5]\d)(?!\d)", raw_time)
+            if tm:
+                return base.replace(hour=int(tm.group(1)), minute=int(tm.group(2)))
+            return base
+        except ValueError:
+            pass
+    return parse_chinese_datetime(raw_time)
+
+
 def map_status(raw: str | None) -> ShowStatus:
     text = (raw or "").strip().lower()
     if not text:
@@ -121,9 +143,7 @@ def normalize_one(raw: RawShowItem) -> Show | None:
 
     sessions: list[ShowSession] = []
     for s in raw.sessions_raw:
-        st = parse_chinese_datetime(
-            str(s.get("start_time") or s.get("time") or s.get("showTime") or s.get("name") or "")
-        )
+        st = _parse_session_start(s)
         tiers: list[TicketTier] = []
         for t in s.get("ticket_tiers") or s.get("skus") or []:
             if not isinstance(t, dict):

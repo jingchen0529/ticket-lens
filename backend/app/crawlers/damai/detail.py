@@ -17,9 +17,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 from urllib.parse import unquote, urlencode
@@ -154,12 +156,12 @@ def _parse_price(val: Any) -> float | None:
 
 
 def _perform_begin_to_raw(begin: str | None, name: str | None) -> str:
-    """202608141900 → 2026-08-14 19:00；优先用 performName。"""
-    if name and str(name).strip():
-        return str(name).strip()
+    """202608141900 → 2026-08-14 19:00；名称仅在结构化时间缺失时兜底。"""
     s = str(begin or "").strip()
     if len(s) >= 12 and s.isdigit():
         return f"{s[0:4]}-{s[4:6]}-{s[6:8]} {s[8:10]}:{s[10:12]}"
+    if name and str(name).strip():
+        return str(name).strip()
     return s
 
 
@@ -849,8 +851,9 @@ async def enrich_items_detail(
     delay_s: float = 0.35,
     fetch_all_dates: bool = True,
     date_limit: int = 40,
+    on_item: Callable[[RawShowItem], Awaitable[None] | None] | None = None,
 ) -> list[RawShowItem]:
-    """批量补全详情；逐条串行，降低风控。"""
+    """批量补全详情；逐条串行，并在每条完成后立即交给编排层。"""
     out: list[RawShowItem] = []
     total = len(items)
     for idx, item in enumerate(items, 1):
@@ -862,12 +865,16 @@ async def enrich_items_detail(
                 date_limit=date_limit,
                 delay_s=min(delay_s, 0.2),
             )
-            out.append(enriched)
-            if idx == 1 or idx == total or idx % 10 == 0:
-                logger.info("damai detail progress %s/%s id=%s", idx, total, item.source_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("damai detail enrich error id=%s: %s", item.source_id, exc)
-            out.append(item)
+            enriched = item
+        out.append(enriched)
+        if on_item is not None:
+            callback_result = on_item(enriched)
+            if inspect.isawaitable(callback_result):
+                await callback_result
+        if idx == 1 or idx == total or idx % 10 == 0:
+            logger.info("damai detail progress %s/%s id=%s", idx, total, item.source_id)
         if delay_s > 0 and idx < total:
             await asyncio.sleep(delay_s)
     return out

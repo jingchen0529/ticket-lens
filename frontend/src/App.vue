@@ -1,5 +1,6 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { nextTick, ref, onMounted, watch } from 'vue'
+import { Download } from 'lucide-vue-next'
 import { api } from './api'
 import { checkForUpdate } from './updater.js'
 import CrawlView from './views/CrawlView.vue'
@@ -18,6 +19,7 @@ const healthError = ref('')
 
 // 启动自动检查到的新版本（仅提示，安装在设置页操作）
 const updateAvailableVersion = ref('')
+let availableUpdate = null
 
 // 主题配色配置 (默认 #eb4f9a)
 const currentThemeColor = ref(localStorage.getItem('theme_color') || '#eb4f9a')
@@ -25,6 +27,7 @@ const currentThemeColor = ref(localStorage.getItem('theme_color') || '#eb4f9a')
 // CrawlView / ShowsView 组件引用
 const crawlViewRef = ref(null)
 const showsViewRef = ref(null)
+const settingsViewRef = ref(null)
 
 // 辅助工具：将 HEX 转为 RGBA 字符串
 function hexToRgba(hex, alpha) {
@@ -67,6 +70,12 @@ async function checkHealth() {
   }
 }
 
+async function handleUpdatePillClick() {
+  currentTab.value = 'settings'
+  await nextTick()
+  settingsViewRef.value?.openUpdatePanel?.(availableUpdate)
+}
+
 onMounted(() => {
   checkHealth()
   setInterval(checkHealth, 10000)
@@ -75,7 +84,10 @@ onMounted(() => {
   // 只提示，不自动安装——安装由用户在设置页确认后触发。
   setTimeout(async () => {
     const update = await checkForUpdate()
-    if (update) updateAvailableVersion.value = update.version || ''
+    if (update) {
+      availableUpdate = update
+      updateAvailableVersion.value = update.version || ''
+    }
   }, 4000)
 })
 
@@ -139,11 +151,11 @@ watch(currentTab, (newTab, oldTab) => {
         <button
           v-if="updateAvailableVersion"
           class="update-pill"
-          @click="currentTab = 'settings'"
-          title="前往系统设置更新"
+          @click="handleUpdatePillClick"
+          title="打开软件版本更新"
         >
-          <span class="update-dot"></span>
-          有新版本 v{{ updateAvailableVersion }}
+          <Download :size="14" :stroke-width="2.2" aria-hidden="true" />
+          <span>有新版本 v{{ updateAvailableVersion }}</span>
         </button>
       </div>
     </header>
@@ -155,6 +167,7 @@ watch(currentTab, (newTab, oldTab) => {
         <ShowsView v-show="currentTab === 'shows'" ref="showsViewRef" />
         <SettingsView
           v-show="currentTab === 'settings'"
+          ref="settingsViewRef"
           :current-theme="currentThemeColor"
           @update-theme="handleThemeChange"
         />

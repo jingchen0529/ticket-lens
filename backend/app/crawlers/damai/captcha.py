@@ -10,7 +10,7 @@
     provider: bingtop
     username: your_user
     password: your_pass
-    fruit_strategy: local_first   # local_first | provider_first | local_only | provider_only
+    fruit_strategy: provider_first  # local_first | provider_first | local_only | provider_only
     fruit_captcha_type: 1359      # 冰拓：1359 上下完整 / 1357 主图+题干
 """
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from playwright.async_api import Frame, Page
+from playwright.async_api import Page
 
 from app.browser.captcha.base import (
     CaptchaChallenge,
@@ -100,7 +100,9 @@ class DamaiCaptchaSolver(CaptchaSolver):
             1,
             min(5, int(getattr(captcha_cfg, "fruit_max_rounds", 1) or 1)),
         )
-        self.fruit_strategy = str(getattr(captcha_cfg, "fruit_strategy", "local_first") or "local_first")
+        self.fruit_strategy = str(
+            getattr(captcha_cfg, "fruit_strategy", "provider_first") or "provider_first"
+        )
         self.provider: CaptchaProvider | None = create_provider(
             getattr(captcha_cfg, "provider", "local_slider") or "local_slider",
             getattr(captcha_cfg, "api_key", "") or "",

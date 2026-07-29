@@ -15,6 +15,7 @@ r"""统一路径解析：兼顾源码运行与 PyInstaller 打包、跨 macOS / 
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -80,6 +81,17 @@ def _is_writable(directory: Path) -> bool:
         return False
 
 
+def _migrate_legacy_macos_data(legacy: Path, target: Path) -> None:
+    """首次升级时把旧 App 包内的数据迁到 macOS 用户数据目录。"""
+    try:
+        if not legacy.is_dir() or (target.exists() and any(target.iterdir())):
+            return
+        shutil.copytree(legacy, target, dirs_exist_ok=True)
+    except OSError:
+        # 迁移失败不阻止启动，后续仍使用可写的系统用户数据目录。
+        return
+
+
 @lru_cache(maxsize=1)
 def data_dir() -> Path:
     """用户数据目录（DB / cookie / 导出落这里）。
@@ -96,6 +108,12 @@ def data_dir() -> Path:
         return d
 
     if is_frozen():
+        if sys.platform == "darwin":
+            target = _system_user_data_dir()
+            _migrate_legacy_macos_data(executable_dir() / "data", target)
+            target.mkdir(parents=True, exist_ok=True)
+            return target
+
         beside_app = executable_dir() / "data"
         if _is_writable(beside_app):
             return beside_app

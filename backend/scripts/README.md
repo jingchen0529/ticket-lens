@@ -20,6 +20,18 @@ source .venv/bin/activate
 python scripts/backfill_detail.py
 ```
 
+### migrate_split_sessions.py
+
+把旧版本遗留的“一个项目一行、sessions 内含多个场次”迁移为每场次一行。
+默认只预览，确认后执行：
+
+```bash
+python scripts/migrate_split_sessions.py
+python scripts/migrate_split_sessions.py --apply
+```
+
+写库前会自动生成同目录 SQLite 备份，不会重新请求大麦。
+
 ---
 
 ## 开发调试脚本

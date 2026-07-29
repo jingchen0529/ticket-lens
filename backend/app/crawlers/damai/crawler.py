@@ -21,7 +21,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from app.browser.captcha.base import CaptchaSolver
-from app.crawlers.base import BaseCrawler
+from app.crawlers.base import BaseCrawler, ItemCallback
 from app.crawlers.damai.captcha import DamaiCaptchaSolver
 from app.crawlers.damai.detail import enrich_items_detail
 from app.crawlers.damai.fruit_slider import CaptchaPayload, attach_payload_listener
@@ -58,8 +58,10 @@ class DamaiCrawler(BaseCrawler):
         cities: Sequence[str],
         keywords: Sequence[str],
         max_pages: int,
+        on_item: ItemCallback | None = None,
     ) -> list[RawShowItem]:
         items: list[RawShowItem] = []
+        seen_projects: set[str] = set()
         kw_list = list(keywords) if keywords else [""]
 
         async with self.session.page() as page:
@@ -70,7 +72,15 @@ class DamaiCrawler(BaseCrawler):
                         "damai crawl city=%s keyword=%r pages=%s", city, keyword, pages_label
                     )
                     page_items = await self._crawl_city_keyword(page, city, keyword, max_pages)
-                    items.extend(page_items)
+                    # 同一项目可能同时命中多个关键词、城市入口或翻页响应。详情只拉一次，
+                    # 展示条数由真实场次决定，不由列表接口重复返回次数决定。
+                    for item in page_items:
+                        key = item.source_id or item.url
+                        if key and key in seen_projects:
+                            continue
+                        if key:
+                            seen_projects.add(key)
+                        items.append(item)
                     await self._delay()
 
             # 列表完成后：用同一浏览器上下文拉 subpage，补全场次/票档/场馆
@@ -84,11 +94,15 @@ class DamaiCrawler(BaseCrawler):
                     delay_s=delay,
                     fetch_all_dates=True,
                     date_limit=date_limit,
+                    on_item=on_item,
                 )
                 self.log.info(
                     "damai detail enrich done with_sessions=%s",
                     sum(1 for i in items if i.sessions_raw),
                 )
+            elif on_item is not None:
+                for item in items:
+                    await self._emit_item(item, on_item)
 
         self.log.info("damai done raw=%s", len(items))
         return items

@@ -5,6 +5,7 @@ description = "大麦 / 猫眼演出数据采集：分策略浏览器爬虫 + �
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "certifi>=2024.8.30",
     "playwright>=1.49.0",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",

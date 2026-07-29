@@ -183,6 +183,37 @@ def test_split_same_day_multiple_sessions_each_row():
     assert hours == [15, 17, 19]
 
 
+def test_split_uses_date_key_when_session_name_contains_other_numbers():
+    """dateKey 应覆盖场次名称里的生日/曲目数字，不能误解析成 0520 年。"""
+    raw = RawShowItem(
+        source=SourcePlatform.DAMAI,
+        source_id="date-key-1",
+        title="日期键测试",
+        sessions_raw=[
+            {
+                "id": "p1",
+                "name": "2026-07-26 周日(陈粒生日) 16:00，歌曲专题",
+                "start_time": "2026-07-26 周日(陈粒生日) 16:00，歌曲专题",
+                "date_key": "20260726",
+            },
+            {
+                "id": "p2",
+                "name": "7.26周日22:00～打烊，R&B/民谣",
+                "start_time": "7.26周日22:00～打烊，R&B/民谣",
+                "date_key": "20260726",
+            },
+        ],
+    )
+
+    shows = normalize_items([raw])
+
+    assert len(shows) == 2
+    assert [(s.start_time.year, s.start_time.hour) for s in shows] == [
+        (2026, 16),
+        (2026, 22),
+    ]
+
+
 def test_split_skips_invalid_year_sessions():
     """年份越界（如 0520/2820）的场次视为无效日期被跳过。"""
     raw = _raw_with_sessions(

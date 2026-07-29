@@ -41,9 +41,9 @@ class CaptchaConfig(BaseModel):
     # 打码类型覆盖（冰拓水果默认 1358 主图+标题；可改 1357/1359）
     fruit_captcha_type: int | None = None
     # 策略：local_first | provider_first | local_only | provider_only
-    # local_first：先本地打分，失败再打码（默认，省钱）
-    # provider_first：先打码，失败回退本地
-    fruit_strategy: str = "local_first"
+    # provider_first：配置了打码平台就首题提交，平台不可用时回退本地。
+    # 避免 local_first + 多轮预算造成前几题固定本地失败、最后才调用打码平台。
+    fruit_strategy: str = "provider_first"
     # 水果滑块扫描步长（像素），越小越准越慢
     fruit_scan_step: float = 4.0
     # 单次自动求解最多提交多少道新题，限制付费识别预算

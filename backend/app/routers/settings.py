@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import ssl
 from pathlib import Path
-from typing import Optional
 
+import certifi
 import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -68,7 +69,6 @@ def update_settings(req: SettingsData) -> dict:
         _save_settings(req)
 
         # 同步更新 config.yaml 中的冰拓配置（供后端采集引擎使用）
-        from app.core.config import load_config
         from app.core import paths
 
         cfg_path = paths.config_path()
@@ -88,6 +88,10 @@ def update_settings(req: SettingsData) -> dict:
         # 如果填了冰拓账号，自动切换 provider 为 bingtop
         if req.bingtuo.username and req.bingtuo.password:
             cfg_data["captcha"]["provider"] = "bingtop"
+            # 自动模式首题直接交给冰拓；冰拓未返回有效距离时再走免费的
+            # 本地算法兜底，避免直接中止或再次调用付费接口。
+            cfg_data["captcha"]["fruit_strategy"] = "provider_first"
+            cfg_data["captcha"]["fruit_max_rounds"] = 1
 
         # 同步水果滑块类型
         cfg_data["captcha"]["fruit_captcha_type"] = req.fruit_captcha_type
@@ -127,11 +131,18 @@ async def get_bingtuo_balance() -> dict:
     settings = _load_settings()
     username = settings.bingtuo.username
     password = settings.bingtuo.password
-    if not username or not password:
+    if not username.strip() or not password.strip():
         return {"configured": False, "points": None, "error": "未配置冰拓账号"}
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        # 桌面应用可能继承指向不存在文件的代理/CA 环境变量。固定使用随应用
+        # 打包的 certifi 证书，避免 PyInstaller 环境中出现 FileNotFoundError。
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            verify=ssl_context,
+            trust_env=False,
+        ) as client:
             resp = await client.post(
                 "https://www.bingtop.com/ocr/check_points/",
                 data={"username": username, "password": password},

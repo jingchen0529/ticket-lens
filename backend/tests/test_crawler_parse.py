@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -219,3 +220,37 @@ async def test_damai_fetch_helper_raises_typed_error_for_unexpected_payload():
 
     with pytest.raises(_SearchAjaxError, match="unexpected response type=NoneType"):
         await crawler._fetch_search_ajax(page, city="上海", keyword="", page_no=1)
+
+
+@pytest.mark.asyncio
+async def test_damai_deduplicates_projects_before_detail_fetch(monkeypatch):
+    import app.crawlers.damai.crawler as crawler_module
+
+    @asynccontextmanager
+    async def page_context():
+        yield object()
+
+    session = SimpleNamespace(page=page_context)
+    cfg = AppConfig()
+    cfg.crawl.request_delay_seconds = 0
+    crawler = DamaiCrawler(session, cfg)  # type: ignore[arg-type]
+    first = crawler._record_to_raw(
+        {"projectid": "same", "name": "重复项目"}, city="上海", from_api=True
+    )
+    duplicate = crawler._record_to_raw(
+        {"projectid": "same", "name": "重复项目"}, city="北京", from_api=True
+    )
+    assert first is not None and duplicate is not None
+    crawler._crawl_city_keyword = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[[first], [duplicate]]
+    )
+
+    async def fake_enrich(_page, items, **_kwargs):
+        assert [item.source_id for item in items] == ["same"]
+        return items
+
+    monkeypatch.setattr(crawler_module, "enrich_items_detail", fake_enrich)
+
+    items = await crawler.crawl(cities=["上海", "北京"], keywords=[], max_pages=1)
+
+    assert [item.source_id for item in items] == ["same"]

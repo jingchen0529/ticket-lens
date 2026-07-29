@@ -53,10 +53,26 @@ async def run_crawl(job: CrawlJob, config: AppConfig) -> CrawlResult:
                 # 任务级开关覆盖配置（桌面端可关详情加速）
                 if hasattr(job, "enrich_detail"):
                     run_config.crawl.enrich_detail = bool(job.enrich_detail)
+
+                async def persist_item(item: RawShowItem) -> None:
+                    # 详情一返回就按场次规范化并替换该项目的库内记录。前端轮询
+                    # 数据库时能立即看到拆分结果，不必等整个城市/全国任务结束。
+                    item_shows = normalize_items([item], config.pipeline)
+                    storage.save_raw([item])
+                    storage.save_shows(item_shows)
+                    logger.info(
+                        "source %s item=%s persisted sessions=%s rows=%s",
+                        src.value,
+                        item.source_id,
+                        len(item.sessions_raw),
+                        len(item_shows),
+                    )
+
                 items = await crawler.crawl(
                     cities=job.cities,
                     keywords=job.keywords,
                     max_pages=job.max_pages,
+                    on_item=persist_item,
                 )
                 raw_all.extend(items)
                 result.by_source[src.value] = len(items)
