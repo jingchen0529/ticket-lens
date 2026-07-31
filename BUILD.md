@@ -40,7 +40,7 @@ GitHub Actions 页面手动运行 `Release`（`workflow_dispatch`）。手动触
 
 ### 开发模式
 ```bash
-cd frontend
+cd web/frontend
 npm install
 npm run tauri:dev
 ```
@@ -49,13 +49,13 @@ npm run tauri:dev
 
 ### macOS 打包
 ```bash
-cd frontend
+cd web/frontend
 npm run tauri:build:macos
 ```
-- **输出位置**: `frontend/src-tauri/target/universal-apple-darwin/release/bundle/dmg/`
+- **输出位置**: `web/frontend/src-tauri/target/universal-apple-darwin/release/bundle/dmg/`
 - **产物**: `daxi_*.dmg`
 
-> ⚠️ 这个 script 打的是 universal 壳，但 `backend/packaging/dist/daxi` 里的
+> ⚠️ 这个 script 打的是 universal 壳，但 `packaging/dist/daxi` 里的
 > PyInstaller 后端只有当前机器的架构。本地自用没问题，交付给另一种架构的机器会起不了后端。
 > 要交付就走 CI（tag 触发），CI 是每个架构各自原生打的。
 
@@ -63,29 +63,29 @@ npm run tauri:build:macos
 > ⚠️ 必须在 Windows 系统上执行
 
 ```bash
-cd frontend
+cd web/frontend
 npm run tauri:build:windows
 ```
-- **输出位置**: `frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`
+- **输出位置**: `web/frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`
 - **产物**: `daxi_*-setup.exe`
 
 ### Linux 打包
 > ⚠️ 必须在 Linux 系统上执行
 
 ```bash
-cd frontend
+cd web/frontend
 npm run tauri:build:linux
 ```
 - **输出位置**: 
-  - DEB: `frontend/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/`
-  - AppImage: `frontend/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/`
+  - DEB: `web/frontend/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/`
+  - AppImage: `web/frontend/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/`
 
 ## Git 策略
 
 ### 已排除的文件
 - ✅ 所有 `target/` 编译产物（约 5.9GB）
 - ✅ 所有平台安装包（`.dmg`, `.exe`, `.msi`, `.deb`, `.AppImage` 等）
-- ✅ Backend 打包产物 `backend/packaging/dist/`
+- ✅ Backend 打包产物 `packaging/dist/`
 
 ### 限制
 - Git 仓库只接受 **10MB 以下**的文件

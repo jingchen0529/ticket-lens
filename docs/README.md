@@ -51,7 +51,7 @@ docs/
 - [README.md](../README.md) - 项目概览和快速开始
 - [BUILD.md](../BUILD.md) - 完整构建流程
 - [CHANGELOG.md](../CHANGELOG.md) - 版本变更历史
-- [backend/README.md](../backend/README.md) - 后端详细说明
+- [README.md](../README.md) - 项目概览与后端详细说明
 
 ---
 

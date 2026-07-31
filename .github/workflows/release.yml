@@ -76,7 +76,6 @@ jobs:
 
       - name: Install backend deps + PyInstaller
         shell: bash
-        working-directory: backend
         run: |
           set -euxo pipefail
           uv venv
@@ -86,14 +85,13 @@ jobs:
       # 下到项目内固定目录，避免在后续步骤猜 Chromium revision 号。
       - name: Download Playwright Chromium
         shell: bash
-        working-directory: backend
         env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/backend/pw-browsers
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/pw-browsers
         run: uv run playwright install chromium
 
       - name: Build backend binary (PyInstaller)
         shell: bash
-        working-directory: backend/packaging
+        working-directory: packaging
         run: uv run pyinstaller daxi.spec --noconfirm
 
       # 运行时 app/core/paths.py:setup_browser_env() 会把 PLAYWRIGHT_BROWSERS_PATH
@@ -103,8 +101,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          src="backend/pw-browsers"
-          dst="backend/packaging/dist/daxi/ms-playwright"
+          src="pw-browsers"
+          dst="packaging/dist/daxi/ms-playwright"
           mkdir -p "$dst"
           if [ "$RUNNER_OS" = "macOS" ]; then
             for d in "$src"/*; do
@@ -121,7 +119,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dst="backend/packaging/dist/daxi/ms-playwright"
+          dst="packaging/dist/daxi/ms-playwright"
           headful=$(find "$dst" -maxdepth 1 -type d -name 'chromium-*' | head -1 || true)
           headless=$(find "$dst" -maxdepth 1 -type d -name 'chromium_headless_shell-*' | head -1 || true)
           [ -n "$headful" ]  || { echo "::error::缺少有头 Chromium (chromium-*)"; exit 1; }
@@ -134,10 +132,10 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: web/frontend/package-lock.json
 
       - name: Install frontend deps
-        working-directory: frontend
+        working-directory: web/frontend
         run: npm ci
 
       - name: Setup Rust
@@ -148,7 +146,7 @@ jobs:
       - name: Cache cargo
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: frontend/src-tauri
+          workspaces: web/frontend/src-tauri
           key: ${{ matrix.label }}
 
       # 把 tag 版本号写进 tauri.conf.json。否则安装包内建版本恒为 0.1.0，
@@ -160,17 +158,17 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          conf="frontend/src-tauri/tauri.conf.json"
+          conf="web/frontend/src-tauri/tauri.conf.json"
           node -e "const fs=require('fs');const p='$conf';const j=JSON.parse(fs.readFileSync(p));j.version='$version';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
           echo "stamped version: $version"
           grep '"version"' "$conf"
 
       # tauri build 会顺带跑 npm run build（前端）并把 tauri.conf.json 的
-      # resources（backend/packaging/dist/daxi）打进安装包。
+      # resources（packaging/dist/daxi）打进安装包。
       # createUpdaterArtifacts=true 时会额外产出 updater 包（macOS .app.tar.gz /
       # Windows -setup.exe）及对应 .sig —— 需要签名私钥才能生成 .sig。
       - name: Tauri build
-        working-directory: frontend
+        working-directory: web/frontend
         env:
           # 无密码密钥：只需私钥本身。密钥内容见项目记忆 ci-release-pipeline。
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -193,13 +191,13 @@ jobs:
           version="${GITHUB_REF_NAME}"
           case "$version" in refs/*|"") version="dev" ;; esac
 
-          bundle="frontend/src-tauri/target/$RUST_TARGET/release/bundle"
+          bundle="web/frontend/src-tauri/target/$RUST_TARGET/release/bundle"
           out="release-assets"
           mkdir -p "$out"
 
           if [ ! -d "$bundle" ]; then
             echo "::error::未找到 bundle 目录: $bundle"
-            find frontend/src-tauri/target -maxdepth 4 -type d -name bundle || true
+            find web/frontend/src-tauri/target -maxdepth 4 -type d -name bundle || true
             exit 1
           fi
 
