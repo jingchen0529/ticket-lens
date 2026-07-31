@@ -428,6 +428,10 @@ const facetOptions = ref({ source: [], city: [], category: [], status: [] })
 const isCityExpanded = ref(false)
 const citySearchQuery = ref('')
 
+const citySelectDropdownRef = ref(null)
+const isCityDropdownOpen = ref(false)
+const cityFuzzySearch = ref('')
+
 // 从后端数据库加载的全量城市数据（动态保证第一项为“全部”）
 const allCityOptions = computed(() => {
   const dbCities = facetOptions.value.city || []
@@ -439,24 +443,25 @@ const allCityOptions = computed(() => {
   return Array.from(set)
 })
 
-// 下拉框城市列表（排除“全部”）
-const dropdownCityOptions = computed(() => {
-  return allCityOptions.value.filter(c => c !== '全部')
+// 下拉框城市列表（支持模糊搜索，排除“全部”）
+const filteredDropdownCities = computed(() => {
+  const allCities = allCityOptions.value.filter(c => c !== '全部')
+  if (!cityFuzzySearch.value.trim()) return allCities
+  const q = cityFuzzySearch.value.trim().toLowerCase()
+  return allCities.filter(c => c.toLowerCase().includes(q))
 })
 
-// 展现给用户的城市 Chip 列表（搜索时过滤；展开状态下通过 css scroll-area 滚动展现）
-const visibleCityOptions = computed(() => {
-  let list = allCityOptions.value
-  if (citySearchQuery.value.trim()) {
-    const q = citySearchQuery.value.trim().toLowerCase()
-    return list.filter(c => c.toLowerCase().includes(q))
-  }
-  return list
-})
-
-function handleCitySelect(cityName) {
-  filters.city = cityName === '全部' ? 'all' : cityName
+function selectCity(city) {
+  filters.city = city
+  isCityDropdownOpen.value = false
+  cityFuzzySearch.value = ''
   doSearch()
+}
+
+function handleClickOutside(e) {
+  if (citySelectDropdownRef.value && !citySelectDropdownRef.value.contains(e.target)) {
+    isCityDropdownOpen.value = false
+  }
 }
 
 const totalPages = computed(() => Math.ceil(total.value / pageSize.value) || 1)
@@ -777,10 +782,12 @@ onMounted(() => {
   loadFacets()
   fetchShows()
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('click', handleClickOutside)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('click', handleClickOutside)
 })
 
 async function refresh() {
@@ -816,138 +823,199 @@ defineExpose({ refresh, fetchShows, loadFacets })
 <template>
   <div class="shows-view">
 
-    <!-- 图1/图2 经典大麦城市筛选展示卡片 -->
-    <div class="city-picker-card">
-      <div class="active-city-header">
-        <div class="active-city-header-left">
-          <span class="active-city-title">当前选中城市</span>
-          <span class="active-city-badge">
-            {{ filters.city === 'all' ? '全部' : filters.city }}
-          </span>
-        </div>
-
-        <!-- 展开模式下的快速查找城市搜索框 -->
-        <div v-if="isCityExpanded" class="city-search-box">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="city-search-icon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <Input
-            type="text"
-            v-model="citySearchQuery"
-            placeholder="搜索城市..."
-            class="city-search-input"
+    <!-- 顶部 Filter 综合筛选栏（精准匹配设计图：单行开阔列排布 + 城市模糊搜索 Select） -->
+    <div class="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-xs mb-4">
+      <div class="flex items-center flex-wrap gap-3">
+        
+        <!-- 1. 关键词输入框 (搜索演出、艺人、场馆名称...) -->
+        <div class="relative min-w-[220px] flex-1 max-w-xs">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input 
+            type="text" 
+            v-model="filters.keyword" 
+            placeholder="搜索演出、艺人、场馆名称..." 
+            class="w-full bg-[#f4f4f6] text-slate-800 text-xs rounded-xl pl-9 pr-3 py-2 border border-transparent outline-none focus:border-[var(--primary)] focus:bg-white transition-all font-medium"
+            @keyup.enter="doSearch"
           />
-          <Button v-if="citySearchQuery" variant="ghost" class="clear-city-search" @click="citySearchQuery = ''">✕</Button>
         </div>
-      </div>
 
-      <div class="city-grid-container" :class="{ expanded: isCityExpanded }">
-        <div class="city-scroll-area" :class="{ expanded: isCityExpanded }">
-          <div class="city-chips-list">
-            <Button
-              v-for="c in visibleCityOptions"
-              :key="c"
-              variant="ghost"
-              class="city-chip-btn"
-              :class="{ active: (c === '全部' && filters.city === 'all') || filters.city === c }"
-              @click="handleCitySelect(c)"
-            >
-              {{ c }}
-            </Button>
-            <div v-if="visibleCityOptions.length === 0" class="no-city-match">
-              未找到匹配城市
+        <!-- 2. 城市 (City) 下拉选择 + 模糊搜索 -->
+        <div class="relative inline-block" ref="citySelectDropdownRef">
+          <button 
+            type="button"
+            class="h-9 px-3.5 bg-white border border-slate-200 text-slate-700 font-medium text-xs rounded-xl flex items-center gap-2 hover:border-[var(--primary)] transition-all cursor-pointer shadow-2xs"
+            @click="isCityDropdownOpen = !isCityDropdownOpen"
+          >
+            <span class="truncate max-w-[110px]">
+              {{ filters.city === 'all' || !filters.city ? '城市 (City)' : filters.city }}
+            </span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-slate-400 shrink-0"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+
+          <!-- 城市模糊搜索下拉浮窗 -->
+          <div 
+            v-if="isCityDropdownOpen" 
+            class="absolute left-0 top-full mt-1.5 w-60 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-2.5 space-y-2"
+          >
+            <div class="relative">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input 
+                type="text" 
+                v-model="cityFuzzySearch" 
+                placeholder="搜索城市..." 
+                class="w-full bg-slate-50 border border-slate-200 text-xs rounded-lg pl-8 pr-6 py-1.5 outline-none focus:border-[var(--primary)] focus:bg-white transition-all"
+              />
+              <span v-if="cityFuzzySearch" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600 cursor-pointer" @click="cityFuzzySearch = ''">✕</span>
+            </div>
+
+            <div class="max-h-52 overflow-y-auto space-y-0.5 custom-dark-scrollbar pr-1">
+              <button 
+                type="button"
+                class="w-full text-left px-2.5 py-1.5 text-xs rounded-lg transition-colors flex items-center justify-between cursor-pointer"
+                :class="filters.city === 'all' ? 'bg-[var(--primary-light,#fde8f3)] text-[var(--primary)] font-bold' : 'text-slate-700 hover:bg-slate-100'"
+                @click="selectCity('all')"
+              >
+                <span>全部城市 (All)</span>
+                <span v-if="filters.city === 'all'">✓</span>
+              </button>
+
+              <button 
+                v-for="c in filteredDropdownCities" 
+                :key="c"
+                type="button"
+                class="w-full text-left px-2.5 py-1.5 text-xs rounded-lg transition-colors flex items-center justify-between cursor-pointer"
+                :class="filters.city === c ? 'bg-[var(--primary-light,#fde8f3)] text-[var(--primary)] font-bold' : 'text-slate-700 hover:bg-slate-100'"
+                @click="selectCity(c)"
+              >
+                <span>{{ c }}</span>
+                <span v-if="filters.city === c">✓</span>
+              </button>
+
+              <div v-if="filteredDropdownCities.length === 0" class="py-4 text-center text-xs text-slate-400">
+                未找到“{{ cityFuzzySearch }}”
+              </div>
             </div>
           </div>
         </div>
 
-        <Button variant="ghost" class="expand-toggle-btn" @click="isCityExpanded = !isCityExpanded">
-          <span>{{ isCityExpanded ? '收起' : '更多' }}</span>
-          <svg v-if="isCityExpanded" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
-          <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
-        </Button>
-      </div>
-    </div>
-
-    <!-- 顶部 Filter 综合筛选栏（全部元素单行开阔并排） -->
-    <div class="filter-card">
-      <div class="filter-row">
-         <Button variant="outline" size="icon" class="h-8 w-8 shrink-0" :disabled="refreshing || loading" title="刷新数据" @click="handleRefresh">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" :class="{ 'icon-spin': refreshing || loading }"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-          </Button>
-        <!-- 1. 列显示设置 按钮 -->
-        <Button variant="outline" size="sm" class="h-8 text-xs gap-1.5 shrink-0" @click="showColumnModal = true">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"/></svg>
-          列显示
-        </Button>
-
-        <!-- 2. 导出 Excel 按钮 -->
-        <Button variant="outline" size="sm" class="h-8 text-xs gap-1.5 shrink-0 border-blue-200 text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-800 dark:text-blue-400" @click="handleExportClick">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          导出
-        </Button>
-
-        <!-- 3. 清除数据 按钮 -->
-        <Button variant="destructive" size="sm" class="h-8 text-xs gap-1.5 shrink-0" :disabled="clearing" @click="showClearModal = true">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-          清除数据
-        </Button>
-
-        <div class="filter-divider"></div>
-
-        <!-- 3. 关键词 -->
-        <div class="filter-item keyword-item">
-          <span class="field-label">关键词</span>
-          <div class="search-input-wrap">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="search-icon"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <Input
-              type="text"
-              v-model="filters.keyword"
-              placeholder="剧目名称"
-              class="search-input"
-              @keyup.enter="doSearch"
-            />
-          </div>
-        </div>
-
-        <!-- 4. 平台 -->
-        <div class="filter-item">
-          <span class="field-label">平台</span>
-          <select v-model="filters.source" class="filter-select">
-            <option value="all">全部平台</option>
+        <!-- 3. 平台 (Platform) 下拉框 -->
+        <div class="relative">
+          <select 
+            v-model="filters.source" 
+            class="h-9 px-3.5 bg-white border border-slate-200 text-slate-700 font-medium text-xs rounded-xl outline-none focus:border-[var(--primary)] transition-all cursor-pointer shadow-2xs appearance-none pr-8"
+          >
+            <option value="all">平台 (Platform)</option>
             <option v-for="s in facetOptions.source" :key="s" :value="s">
               {{ SOURCE_LABELS[s] || s }}
             </option>
           </select>
-        </div>
-        <!-- 6. 分类 -->
-        <div class="filter-item">
-          <span class="field-label">分类</span>
-          <select v-model="filters.category" class="filter-select">
-            <option value="all">全部分类</option>
-            <option v-for="cat in facetOptions.category" :key="cat" :value="cat">{{ cat }}</option>
-          </select>
+          <div class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
         </div>
 
-        <!-- 7. 状态（演出状态，与表格「状态」列同口径） -->
-        <div class="filter-item">
-          <span class="field-label">状态</span>
-          <select v-model="filters.status" class="filter-select">
-            <option value="all">全部状态</option>
+        <!-- 4. 分类 (Category) 下拉框 -->
+        <div class="relative">
+          <select 
+            v-model="filters.category" 
+            class="h-9 px-3.5 bg-white border border-slate-200 text-slate-700 font-medium text-xs rounded-xl outline-none focus:border-[var(--primary)] transition-all cursor-pointer shadow-2xs appearance-none pr-8"
+          >
+            <option value="all">分类 (Category)</option>
+            <option v-for="cat in facetOptions.category" :key="cat" :value="cat">{{ cat }}</option>
+          </select>
+          <div class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+        </div>
+
+        <!-- 5. 状态 (Status) 下拉框 -->
+        <div class="relative">
+          <select 
+            v-model="filters.status" 
+            class="h-9 px-3.5 bg-white border border-slate-200 text-slate-700 font-medium text-xs rounded-xl outline-none focus:border-[var(--primary)] transition-all cursor-pointer shadow-2xs appearance-none pr-8"
+          >
+            <option value="all">状态 (Status)</option>
             <option v-for="o in PERF_STATE_OPTIONS" :key="o.value" :value="o.value">
               {{ o.label }}
             </option>
           </select>
+          <div class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
         </div>
 
-        <!-- 8. 查询 & 重置 按钮 -->
-        <div class="filter-actions flex items-center gap-2">
-          <Button variant="default" size="sm" class="h-8 text-xs gap-1.5 btn-theme-primary text-white" @click="doSearch">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            查询
-          </Button>
-          <Button variant="outline" size="sm" class="h-8 text-xs gap-1.5" @click="resetFilters">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-            重置
-          </Button>
-        </div>
+        <!-- 6. 日期范围 (Date Range) -->
+        <button 
+          type="button" 
+          class="h-9 px-3.5 bg-white border border-slate-200 text-slate-700 font-medium text-xs rounded-xl flex items-center gap-1.5 hover:border-[var(--primary)] transition-all cursor-pointer shadow-2xs"
+          @click="triggerToast('当前已载入最新全量演出日期范围')"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-slate-400"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span>日期范围</span>
+        </button>
+
+        <!-- 7. 筛选 (Search) 主按钮 -->
+        <button 
+          type="button" 
+          class="h-9 px-4 rounded-xl text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-[0.98] cursor-pointer"
+          :style="{ backgroundColor: 'var(--primary)' }"
+          @click="doSearch"
+        >
+          <span>筛选 (Search)</span>
+        </button>
+
+        <!-- 8. 重置 按钮 -->
+        <button 
+          type="button" 
+          class="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-medium text-xs transition-all cursor-pointer"
+          @click="resetFilters"
+        >
+          重置
+        </button>
+
+        <!-- 9. 导出数据 按钮 -->
+        <button 
+          type="button" 
+          class="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-medium text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+          @click="handleExportClick"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>导出数据</span>
+        </button>
+
+        <!-- 10. 清除数据 按钮 -->
+        <button 
+          type="button" 
+          class="h-9 px-3.5 rounded-xl border border-rose-200 bg-white text-rose-600 hover:bg-rose-50 font-medium text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+          :disabled="clearing"
+          @click="showClearModal = true"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          <span>清除数据</span>
+        </button>
+
+        <!-- 列显示设置 -->
+        <button 
+          type="button" 
+          class="h-9 w-9 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 flex items-center justify-center transition-all cursor-pointer ml-auto"
+          title="列显示设置"
+          @click="showColumnModal = true"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3h7a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-7m0-18H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7m0-18v18"/></svg>
+        </button>
+
+        <!-- 刷新已有数据 -->
+        <button 
+          type="button" 
+          class="h-9 w-9 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 flex items-center justify-center transition-all cursor-pointer"
+          :disabled="refreshing || loading"
+          title="刷新数据" 
+          @click="handleRefresh"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" :class="{ 'icon-spin': refreshing || loading }"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+        </button>
       </div>
     </div>
 
