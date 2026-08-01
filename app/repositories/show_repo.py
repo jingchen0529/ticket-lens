@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +64,40 @@ class ShowRepository:
 
     def exists(self) -> bool:
         return self._db_path.exists()
+
+    def stats(self) -> dict[str, int]:
+        """统计数据：库内演出总数、今日新增采集数。
+
+        crawled_at 落库用的是 UTC（models 里 default_factory=utcnow），而「今日」
+        对客户来说是本地日历日，所以把本地当天的起止换算成 UTC 再按区间比较。
+        直接拿本地日期串去比 UTC 日期串会在 CST 的 00:00-08:00 漏计当天数据。
+        """
+        if not self._db_path.exists():
+            return {"total_shows": 0, "today_shows": 0}
+
+        start_local = datetime.now().astimezone().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        # ISO 字符串按字典序比较即等价于时间序，去掉 tzinfo 与落库格式对齐
+        start_utc = start_local.astimezone(UTC).replace(tzinfo=None).isoformat()
+        end_utc = (
+            (start_local + timedelta(days=1)).astimezone(UTC).replace(tzinfo=None).isoformat()
+        )
+
+        with self._connect() as conn:
+            row_total = conn.execute("SELECT COUNT(*) AS n FROM shows").fetchone()
+            total_shows = int(row_total["n"]) if row_total else 0
+
+            row_today = conn.execute(
+                "SELECT COUNT(*) AS n FROM shows WHERE crawled_at >= ? AND crawled_at < ?",
+                (start_utc, end_utc),
+            ).fetchone()
+            today_shows = int(row_today["n"]) if row_today else 0
+
+            return {
+                "total_shows": total_shows,
+                "today_shows": today_shows,
+            }
 
     def _build_where(self, q: ShowQuery) -> tuple[str, list[Any]]:
         clauses: list[str] = []

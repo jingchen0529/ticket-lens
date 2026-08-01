@@ -43,6 +43,12 @@ def health() -> dict:
     return {"status": "ok", "db": str(repo._db_path), "db_exists": repo.exists()}
 
 
+@router.get("/stats")
+def get_stats() -> dict:
+    repo = _repo()
+    return repo.stats()
+
+
 @router.get("/facets")
 def facets() -> dict:
     repo = _repo()

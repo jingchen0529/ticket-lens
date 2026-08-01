@@ -50,6 +50,9 @@ export const api = {
   health() {
     return request('/health')
   },
+  getStats() {
+    return request('/stats')
+  },
   facets() {
     return request('/facets')
   },

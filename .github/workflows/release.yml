@@ -132,10 +132,10 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: web/frontend/package-lock.json
+          cache-dependency-path: web/package-lock.json
 
       - name: Install frontend deps
-        working-directory: web/frontend
+        working-directory: web
         run: npm ci
 
       - name: Setup Rust
@@ -146,7 +146,7 @@ jobs:
       - name: Cache cargo
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: web/frontend/src-tauri
+          workspaces: web/src-tauri
           key: ${{ matrix.label }}
 
       # 把 tag 版本号写进 tauri.conf.json。否则安装包内建版本恒为 0.1.0，
@@ -158,7 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          conf="web/frontend/src-tauri/tauri.conf.json"
+          conf="web/src-tauri/tauri.conf.json"
           node -e "const fs=require('fs');const p='$conf';const j=JSON.parse(fs.readFileSync(p));j.version='$version';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
           echo "stamped version: $version"
           grep '"version"' "$conf"
@@ -168,7 +168,7 @@ jobs:
       # createUpdaterArtifacts=true 时会额外产出 updater 包（macOS .app.tar.gz /
       # Windows -setup.exe）及对应 .sig —— 需要签名私钥才能生成 .sig。
       - name: Tauri build
-        working-directory: web/frontend
+        working-directory: web
         env:
           # 无密码密钥：只需私钥本身。密钥内容见项目记忆 ci-release-pipeline。
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -191,13 +191,13 @@ jobs:
           version="${GITHUB_REF_NAME}"
           case "$version" in refs/*|"") version="dev" ;; esac
 
-          bundle="web/frontend/src-tauri/target/$RUST_TARGET/release/bundle"
+          bundle="web/src-tauri/target/$RUST_TARGET/release/bundle"
           out="release-assets"
           mkdir -p "$out"
 
           if [ ! -d "$bundle" ]; then
             echo "::error::未找到 bundle 目录: $bundle"
-            find web/frontend/src-tauri/target -maxdepth 4 -type d -name bundle || true
+            find web/src-tauri/target -maxdepth 4 -type d -name bundle || true
             exit 1
           fi
 

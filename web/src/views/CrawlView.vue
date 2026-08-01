@@ -151,6 +151,7 @@ const isCheckingBingtuo = ref(false)
 const activeJob = ref(null)   // 当前/最近一次任务记录
 const jobs = ref([])          // 历史任务列表
 const totalShows = ref(0)     // 库内已采集演出总数
+const todayShows = ref(0)     // 今日本地新增采集数据数
 const starting = ref(false)
 const submitError = ref('')
 const logConsoleEl = ref(null)
@@ -200,11 +201,11 @@ const taskRowsFormatted = computed(() => {
   if (jobs.value.length === 0) return out
   for (let index = 0; index < jobs.value.length; index++) {
     const j = jobs.value[index]
-    const taskNo = `TASK-${j.id ? j.id.slice(0, 8).toUpperCase() : (20250727001 + index)}`
+    const taskNo = `TASK-${j.id ? j.id.slice(0, 8).toUpperCase() : String(index + 1).padStart(3, '0')}`
     const city = (j.job?.cities && j.job.cities.length) ? (j.job.cities.length > 2 ? `${j.job.cities[0]}等${j.job.cities.length}市` : j.job.cities.join('、')) : '全国'
     const pages = j.job?.max_pages === 0 ? '全部' : (j.job?.max_pages || 10)
-    const startTime = j.started_at ? formatDateTime(j.started_at) : (j.created_at ? formatDateTime(j.created_at) : '2025-07-27 10:30:45')
-    const endTime = j.finished_at ? formatDateTime(j.finished_at) : (j.state === 'running' ? '-' : '-')
+    const startTime = j.started_at ? formatDateTime(j.started_at) : (j.created_at ? formatDateTime(j.created_at) : '-')
+    const endTime = j.finished_at ? formatDateTime(j.finished_at) : '-'
 
     out.push({
       key: j.id || index,
@@ -280,12 +281,11 @@ const logs = computed(() => {
   const out = []
   const j = activeJob.value
   if (!j) {
-    out.push({ type: 'INFO', time: formatLogTime(), text: 'DataCollector initialized. Loading proxy nodes from DB...' })
-    out.push({ type: 'INFO', time: formatLogTime(), text: 'Loaded 42 high-speed proxy agents successfully.' })
-    out.push({ type: 'WARN', time: formatLogTime(), text: 'Proxy agent 118.23.4.15 responded with timeout. Automatically rotating endpoint.' })
-    out.push({ type: 'SUCCESS', time: formatLogTime(), text: 'Damai API handshaking succeeded. Session ID: dm_sess_90a12.' })
-    out.push({ type: 'INFO', time: formatLogTime(), text: 'Scanning categories [Live, Concerts] in [Shanghai, Hangzhou, Guangzhou] ...' })
-    out.push({ type: 'INFO', time: formatLogTime(), text: 'Pulled 50 entries. Saving batch to MongoDB: collection.venues_archive_q3' })
+    out.push({
+      type: 'INFO',
+      time: formatLogTime(),
+      text: '数据采集系统就绪。在上方配置要采集的平台、城市及页数后，点击【开始数据采集任务】发起采集。'
+    })
     return out
   }
 
@@ -334,12 +334,27 @@ const stat = computed(() => {
   }
 })
 
+// 真实任务成功率（基于历史已结束的任务）
+const computedSuccessRate = computed(() => {
+  const finished = jobs.value.filter(j => ['succeeded', 'failed'].includes(j.state))
+  if (finished.length === 0) return '100.0'
+  const succ = finished.filter(j => j.state === 'succeeded').length
+  return ((succ / finished.length) * 100).toFixed(1)
+})
+
 async function refreshTotal() {
   try {
-    const data = await api.listShows({ limit: 1, offset: 0 })
-    totalShows.value = data.total || 0
-  } catch (e) {
-    // 忽略
+    const data = await api.getStats()
+    totalShows.value = data.total_shows || 0
+    todayShows.value = data.today_shows || 0
+  } catch {
+    try {
+      const data = await api.listShows({ limit: 1, offset: 0 })
+      totalShows.value = data.total || 0
+      todayShows.value = 0
+    } catch {
+      // 忽略
+    }
   }
 }
 
@@ -515,43 +530,89 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
 <template>
   <div class="crawl-view-container flex flex-col gap-5 p-5 bg-[#f8fafc] h-full overflow-y-auto min-h-0 pb-10">
 
-    <!-- 1. 顶部状态 Banner (Top Banner Header) -->
-    <div class="top-status-banner rounded-2xl p-6 text-white shadow-lg transition-all shrink-0" :style="{ background: 'linear-gradient(135deg, var(--primary) 0%, var(--primary-hover, var(--primary)) 100%)' }">
-      <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+    <!-- 1. 顶部状态 Banner (Top Banner Header - Dynamic Theme System Color Glassmorphism Card) -->
+    <div 
+      class="top-status-banner relative rounded-2xl p-6 md:p-7 text-white shadow-lg overflow-hidden transition-all shrink-0 border border-white/10"
+      :style="{ background: 'linear-gradient(135deg, var(--primary) 0%, var(--primary-hover, var(--primary)) 100%)' }"
+    >
+      <!-- 动态发光底纹 -->
+      <div class="absolute -right-16 -top-16 w-80 h-80 bg-white/10 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="absolute left-1/3 -bottom-20 w-80 h-80 bg-black/10 rounded-full blur-3xl pointer-events-none"></div>
+
+      <div class="relative z-10 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+        <!-- 左侧标题与描述 -->
         <div class="banner-left max-w-xl">
-          <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-            数据采集系统正处于就绪状态
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold tracking-wide mb-3 border border-white/25 bg-black/15 backdrop-blur-md text-white">
+            <span class="relative flex h-2 w-2">
+              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+              <span class="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+            </span>
+            <span>{{ isCrawling ? '采集引擎正在运行中' : '数据采集系统就绪待命' }}</span>
+          </div>
+
+          <h1 class="text-xl md:text-2xl font-black tracking-tight text-white flex items-center gap-2">
+            {{ isCrawling ? '演艺数据实时采集任务执行中' : '数据采集系统正处于就绪状态' }}
           </h1>
-          <p class="text-xs text-white/85 mt-2 leading-relaxed font-normal">
-            本模块支持实时采集大麦、猫眼等平台全国范围的演出、演艺数据，支持自动化重试及验证码自主识别策略。
+          <p class="text-xs md:text-sm text-white/85 mt-2 leading-relaxed font-normal">
+            本模块支持实时采集大麦网等平台全国范围的演出、演艺数据，集成智能代理分发、失败自动重试及第三方验证码自主识别策略。
           </p>
         </div>
 
-        <div class="banner-right-stats flex items-center gap-8 self-end md:self-center">
-          <div class="stat-item flex flex-col">
-            <span class="stat-label text-xs text-white/80 font-medium">活跃采集任务</span>
-            <div class="stat-val-row flex items-baseline gap-1 mt-1">
-              <span class="stat-val text-3xl font-extrabold tracking-tight text-white">{{ isCrawling ? '01' : '08' }}</span>
-              <span class="stat-unit text-xs text-white/80">个</span>
-              <span class="text-xs text-emerald-300 font-bold ml-1">↑</span>
+        <!-- 右侧三大核心指标卡片 (系统主题透明 Glass Cards) -->
+        <div class="banner-right-stats grid grid-cols-1 sm:grid-cols-3 gap-3.5 w-full lg:w-auto">
+          
+          <!-- 指标 1：活跃采集任务 -->
+          <div class="stat-card bg-white/15 backdrop-blur-md border border-white/20 rounded-xl p-4 min-w-[150px] flex flex-col justify-between hover:bg-white/20 transition-all shadow-xs">
+            <div class="flex items-center justify-between text-xs text-white/90 font-medium">
+              <span>活跃采集任务</span>
+              <svg class="w-4 h-4 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </div>
+            <div class="flex items-baseline gap-1 mt-2.5 mb-1.5">
+              <span class="text-2xl font-black tracking-tight text-white font-mono">{{ isCrawling ? '1' : '0' }}</span>
+              <span class="text-xs text-white/80 font-medium">个</span>
+            </div>
+            <div class="text-[11px] text-white/85 flex items-center gap-1.5 mt-0.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-white" :class="{ 'animate-pulse': isCrawling }"></span>
+              <span>{{ isCrawling ? '线程并发中' : '资源就绪待命' }}</span>
             </div>
           </div>
 
-          <div class="stat-item flex flex-col">
-            <span class="stat-label text-xs text-white/80 font-medium">今日已采集数据</span>
-            <div class="stat-val-row flex items-baseline gap-1 mt-1">
-              <span class="stat-val text-3xl font-extrabold tracking-tight text-white">{{ (142509 + totalShows).toLocaleString() }}</span>
-              <span class="stat-unit text-xs text-white/80">条</span>
+          <!-- 指标 2：今日已采集数据 -->
+          <div class="stat-card bg-white/15 backdrop-blur-md border border-white/20 rounded-xl p-4 min-w-[160px] flex flex-col justify-between hover:bg-white/20 transition-all shadow-xs">
+            <div class="flex items-center justify-between text-xs text-white/90 font-medium">
+              <span>今日已采集数据</span>
+              <svg class="w-4 h-4 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s-8-1.79-8-4" />
+              </svg>
+            </div>
+            <div class="flex items-baseline gap-1 mt-2.5 mb-1.5">
+              <span class="text-2xl font-black tracking-tight text-white font-mono">{{ todayShows.toLocaleString() }}</span>
+              <span class="text-xs text-white/80 font-medium">条</span>
+            </div>
+            <div class="text-[11px] text-white/85">
+              库内总计 {{ totalShows.toLocaleString() }} 条
             </div>
           </div>
 
-          <div class="stat-item flex flex-col">
-            <span class="stat-label text-xs text-white/80 font-medium">采集成功率</span>
-            <div class="stat-val-row flex items-baseline gap-1 mt-1">
-              <span class="stat-val text-3xl font-extrabold tracking-tight text-white">99.82</span>
-              <span class="stat-unit text-xs text-white/80">%</span>
+          <!-- 指标 3：采集成功率 -->
+          <div class="stat-card bg-white/15 backdrop-blur-md border border-white/20 rounded-xl p-4 min-w-[150px] flex flex-col justify-between hover:bg-white/20 transition-all shadow-xs">
+            <div class="flex items-center justify-between text-xs text-white/90 font-medium">
+              <span>采集成功率</span>
+              <svg class="w-4 h-4 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div class="flex items-baseline gap-1 mt-2.5 mb-1.5">
+              <span class="text-2xl font-black tracking-tight text-white font-mono">{{ computedSuccessRate }}</span>
+              <span class="text-xs text-white/80 font-medium">%</span>
+            </div>
+            <div class="text-[11px] text-white/85">
+              基于 {{ jobs.filter(j => ['succeeded', 'failed'].includes(j.state)).length }} 次历史任务
             </div>
           </div>
+
         </div>
       </div>
     </div>
