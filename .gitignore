@@ -35,6 +35,7 @@ web/frontend/dist/
 
 # --- Tauri 打包产物 ---
 # Rust target 目录（包含所有编译产物和打包文件）
+web/src-tauri/target/
 web/frontend/src-tauri/target/
 
 # 各平台安装包（额外保险，防止意外放到其他位置）
