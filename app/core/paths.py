@@ -168,15 +168,29 @@ _PW_ENV = "PLAYWRIGHT_BROWSERS_PATH"
 def bundled_browsers_dir() -> Optional[Path]:
     """随包 Chromium 目录（若存在）。
 
-    约定：打包后浏览器放在 exe 同级的 `ms-playwright/`（与 CI 打包脚本一致，
-    也便于 Tauri 当 resource 分发）。里面是 `chromium-<rev>/...`。
-    源码运行时返回 None（用系统默认缓存目录，即开发机上装好的那份）。
+    优先检查 pw-browsers/chromium-*/chrome-mac-arm64/（本地 dev 结构）
+    其次检查打包后的 ms-playwright/。
     """
-    if not is_frozen():
-        return None
-    candidate = executable_dir() / "ms-playwright"
+    candidates = []
+
+    # 1. pw-browsers（本地结构） - 无论 frozen 都尝试
+    pw_dir = Path(__file__).parent.parent / "pw-browsers"
+    if pw_dir.is_dir():
+        for subdir in pw_dir.iterdir():
+            if subdir.is_dir() and "chromium" in subdir.name:
+                chrome_dir = subdir / "chrome-mac-arm64"
+                if chrome_dir.is_dir():
+                    candidates.append(chrome_dir)
+
+    # 2. 打包后的 ms-playwright
+    exe_dir = executable_dir()
+    candidate = exe_dir / "ms-playwright"
     if candidate.is_dir():
-        return candidate
+        candidates.append(candidate)
+
+    if candidates:
+        # 返回第一个可用的
+        return candidates[0]
     return None
 
 
@@ -184,10 +198,15 @@ def setup_browser_env() -> None:
     """在启动浏览器前调用：把 PLAYWRIGHT_BROWSERS_PATH 指向随包 Chromium。
 
     - 已由外部显式设置该环境变量时不覆盖（便于调试指向系统 Chromium）。
-    - 未打包或找不到随包目录时不动，交给 Playwright 默认行为。
+    - 无论 frozen 与否，都优先用 pw-browsers 目录。
     """
     if os.environ.get(_PW_ENV):
         return
     bundled = bundled_browsers_dir()
     if bundled is not None:
         os.environ[_PW_ENV] = str(bundled)
+    else:
+        # 作为 fallback，尝试直接在 pw-browsers 根目录下找
+        pw_root = Path(__file__).parent.parent / "pw-browsers"
+        if pw_root.is_dir():
+            os.environ[_PW_ENV] = str(pw_root)

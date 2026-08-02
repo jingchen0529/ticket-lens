@@ -14,16 +14,23 @@ import {
 } from '@/components/ui/dialog'
 
 // 1. 目标平台 (目前仅开放大麦网)
-const selectedPlatforms = ref(['damai'])
-const selectedPlatformTab = ref('damai')
+const selectedPlatforms = ref(['damai', 'maoyan'])
+const selectedPlatformTab = ref('all')
 
 function setPlatformTab(tab) {
-  if (tab === 'maoyan') {
-    toast.info('猫眼演出尚在对接中，目前暂未开放选抓')
-    return
+  if (tab === 'all') {
+    selectedPlatformTab.value = tab
+    selectedPlatforms.value = ['damai', 'maoyan']
+  } else if (tab === 'damai') {
+    selectedPlatformTab.value = tab
+    selectedPlatforms.value = ['damai']
+  } else if (tab === 'maoyan') {
+    selectedPlatformTab.value = tab
+    selectedPlatforms.value = ['maoyan']
+  } else {
+    selectedPlatformTab.value = tab
+    selectedPlatforms.value = ['damai']
   }
-  selectedPlatformTab.value = tab
-  selectedPlatforms.value = ['damai']
 }
 
 let lastNotifiedJobIdState = ''
@@ -652,12 +659,11 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
                 大麦网 (Damai)
               </button>
               <button 
-                class="seg-btn flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all text-center cursor-not-allowed opacity-60"
+                class="seg-btn flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all text-center"
                 :class="selectedPlatformTab === 'maoyan' ? 'bg-white text-slate-900 font-bold shadow-xs' : 'text-slate-400'"
                 @click="setPlatformTab('maoyan')"
-                title="猫眼演出暂未开放选抓"
               >
-                猫眼演出 (暂未开放)
+                猫眼演出
               </button>
             </div>
           </div>

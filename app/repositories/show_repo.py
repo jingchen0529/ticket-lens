@@ -105,9 +105,15 @@ class ShowRepository:
         if q.source:
             clauses.append("source = ?")
             params.append(q.source)
-        if q.city:
-            clauses.append("city = ?")
-            params.append(q.city)
+        if q.city and q.city.lower() not in ("all", "全部", ""):
+            c = q.city.strip()
+            c_clean = c.replace("中国", "").replace("市", "").replace("特别行政区", "").strip()
+            if c_clean and c_clean != c:
+                clauses.append("(city = ? OR city = ? OR city LIKE ?)")
+                params.extend([c, c_clean, f"%{c_clean}%"])
+            else:
+                clauses.append("(city = ? OR city LIKE ?)")
+                params.extend([c, f"%{c}%"])
         if q.category:
             clauses.append("category = ?")
             params.append(q.category)
@@ -300,6 +306,11 @@ class ShowRepository:
                     out[field] = [r["v"] for r in rows]
                 except Exception:
                     out[field] = []
+
+            # 预设平台：包含大麦网(damai)与猫眼(maoyan)
+            for s in ("damai", "maoyan"):
+                if s not in out["source"]:
+                    out["source"].append(s)
 
             # 分类下拉同样排除不对外的大类，与查询/导出口径一致
             out["category"] = [

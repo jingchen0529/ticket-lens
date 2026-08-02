@@ -12,5 +12,8 @@ export * from './pagination'
 export * from './scroll-area'
 export * from './field'
 export * from './toast'
+export * from './select'
+export * from './popover'
+
 
 

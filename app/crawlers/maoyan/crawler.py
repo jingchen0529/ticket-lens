@@ -1,9 +1,8 @@
 """猫眼演出 crawler 策略。
 
 策略特点：
-- 入口 show.maoyan.com H5/列表页（hash 路由）
-- 优先监听美团/猫眼 mapi、show 列表 XHR
-- DOM 回退解析列表卡片
+- 移动端直连 m.dianping.com API（最快最稳）
+- 城市ID 映射 + 分页抓取
 - 验证码：crawlers/maoyan/captcha.py（美团 Yoda / 滑块，自动过验证）
 """
 
@@ -17,7 +16,7 @@ from datetime import datetime
 from typing import Any, Sequence
 from urllib.parse import quote, urlencode
 
-from playwright.async_api import Page, Response
+import httpx
 
 from app.browser.captcha.base import CaptchaSolver
 from app.crawlers.base import BaseCrawler, ItemCallback
@@ -27,18 +26,24 @@ from app.utils.text import clean_text
 
 logger = logging.getLogger(__name__)
 
-_MAOYAN_API_HINTS = (
-    "show.maoyan.com",
-    "maoyan.com/api",
-    "m.maoyan.com",
-    "wx.maoyan.com",
-    "showapi",
-    "performance",
-    "project/list",
-    "search/shows",
-    "ajax/search",
-    "myshow",
-)
+_MAOYAN_CITY_IDS = {
+    "北京": 1, "上海": 2, "广州": 3, "深圳": 4,
+    "杭州": 5, "成都": 6, "武汉": 7, "南京": 8,
+    "西安": 9, "重庆": 10, "天津": 11, "苏州": 12,
+    "长沙": 13, "青岛": 14, "郑州": 15, "厦门": 16,
+    "福州": 17, "合肥": 18, "宁波": 19, "无锡": 20,
+    "沈阳": 21, "大连": 22, "济南": 23, "昆明": 24,
+    "佛山": 25, "东莞": 26, "珠海": 27, "温州": 28,
+    "贵阳": 29, "石家庄": 30, "太原": 31, "哈尔滨": 32,
+    "南昌": 33, "南宁": 34, "兰州": 35, "乌鲁木齐": 36,
+    "海口": 37, "三亚": 38, "银川": 39, "呼和浩特": 40,
+    "银川": 39,
+}
+
+
+def _get_city_id(city: str) -> int:
+    """将城市名映射为猫眼 cityId。"""
+    return _MAOYAN_CITY_IDS.get(city.strip(), 1)
 
 
 class MaoyanCrawler(BaseCrawler):
@@ -88,74 +93,69 @@ class MaoyanCrawler(BaseCrawler):
         max_pages: int,
     ) -> list[RawShowItem]:
         collected: list[RawShowItem] = []
-        api_payloads: list[dict[str, Any]] = []
+        city_id = _get_city_id(city)
+        self.log.info("maoyan mobile API crawl: city=%s cityId=%s keyword=%r", city, city_id, keyword)
 
-        async def on_response(response: Response) -> None:
-            try:
-                url = response.url
-                if not any(h in url for h in _MAOYAN_API_HINTS):
-                    return
-                if response.status != 200:
-                    return
-                ctype = response.headers.get("content-type", "")
-                if "json" not in ctype and "javascript" not in ctype and "text" not in ctype:
-                    return
-                text = await response.text()
-                data = self._try_parse_json(text)
-                if data is not None:
-                    api_payloads.append({"url": url, "data": data})
-            except Exception as exc:  # noqa: BLE001
-                self.log.debug("maoyan intercept skip: %s", exc)
-
-        page.on("response", on_response)
-
-        # max_pages<=0：不设硬上限，空页/无新条目时自然停
-        page_cap = max_pages if max_pages and max_pages > 0 else None
+        page_cap = max_pages if max_pages and max_pages > 0 else 5
         page_no = 1
-        while page_cap is None or page_no <= page_cap:
-            url = self._build_list_url(city, keyword, page_no)
-            api_payloads.clear()
-            try:
-                await self.goto(page, url, wait_until="networkidle")
-            except Exception as exc:  # noqa: BLE001
-                self.log.warning("maoyan networkidle fail, fallback: %s", exc)
-                await self.goto(page, url, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2500)
+        seen_ids: set[str] = set()
 
-            # 猫眼 SPA 可能需要点「加载更多」
-            if page_no > 1:
-                await self._try_load_more(page)
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            while page_no <= page_cap:
+                api_url = (
+                    f"https://m.dianping.com/myshow/ajax/performances/{city_id}"
+                    f";st=0;p={page_no};s=10;tft=0?cityId={city_id}&sellChannel=7"
+                )
+                self.log.info("maoyan fetching page=%s", page_no)
 
-            await self._scroll_page(page, times=3)
-            await page.wait_for_timeout(1000)
+                try:
+                    resp = await client.get(api_url, headers={
+                        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+                        "Referer": f"https://m.dianping.com/myshow/{city_id}",
+                        "Accept": "application/json",
+                        "X-Requested-With": "XMLHttpRequest",
+                    })
 
-            batch: list[RawShowItem] = []
-            if api_payloads:
-                for payload in api_payloads:
-                    batch.extend(self._parse_api_payload(payload, city=city))
+                    if resp.status_code != 200:
+                        self.log.warning("maoyan API status=%s page=%s", resp.status_code, page_no)
+                        break
 
-            if not batch:
-                batch = await self._parse_dom(page, city=city)
+                    data = self._try_parse_json(resp.text)
+                    if not data or not isinstance(data, dict):
+                        self.log.warning("maoyan invalid JSON response page=%s", page_no)
+                        break
 
-            # 去重（SPA 滚动可能重复）
-            seen = {i.source_id for i in collected if i.source_id}
-            new_items = [i for i in batch if not i.source_id or i.source_id not in seen]
-            if not new_items:
-                self.log.info("maoyan empty/dup page city=%s kw=%r page=%s", city, keyword, page_no)
-                break
+                    records = data.get("data", [])
+                    if not isinstance(records, list) or not records:
+                        self.log.info("maoyan empty page=%s, stopping", page_no)
+                        break
 
-            collected.extend(new_items)
-            self.log.info(
-                "maoyan city=%s kw=%r page=%s got=%s",
-                city,
-                keyword,
-                page_no,
-                len(new_items),
-            )
-            page_no += 1
-            await self._delay()
+                    batch_items: list[RawShowItem] = []
+                    for rec in records:
+                        if not isinstance(rec, dict):
+                            continue
+                        item = self._record_to_raw(rec, city=city, from_api=True)
+                        if item and item.source_id not in seen_ids:
+                            seen_ids.add(item.source_id)
+                            batch_items.append(item)
 
-        page.remove_listener("response", on_response)
+                    self.log.info(
+                        "maoyan page=%s records=%s new_items=%s",
+                        page_no, len(records), len(batch_items),
+                    )
+
+                    if not batch_items:
+                        break
+
+                    collected.extend(batch_items)
+                    page_no += 1
+                    await self._delay()
+
+                except Exception as exc:  # noqa: BLE001
+                    self.log.warning("maoyan API error page=%s: %s", page_no, exc)
+                    break
+
+        self.log.info("maoyan crawl finished: city=%s total_items=%s", city, len(collected))
         return collected
 
     def _build_list_url(self, city: str, keyword: str, page_no: int) -> str:
@@ -168,9 +168,15 @@ class MaoyanCrawler(BaseCrawler):
             # 搜索页
             q = urlencode({"keyword": keyword, "cityName": city}, quote_via=quote)
             return f"{base}/qqw#/search?{q}"
-        # 列表页
-        q = urlencode({"cityName": city, "pageNo": page_no}, quote_via=quote)
+        # 列表页 - 支持多个入口（qqw 可能已调整）
         list_url = self.config.sources.maoyan.list_url or f"{base}/qqw#/list"
+        # 备选入口
+        if "qqw#/list" in list_url:
+            list_url = f"{base}/qqw#/list"
+        elif "list" not in list_url.lower():
+            list_url = f"{base}/qqw#/list"
+
+        q = urlencode({"cityName": city, "pageNo": page_no}, quote_via=quote)
         sep = "&" if "?" in list_url or "#" in list_url else "?"
         # hash 路由参数拼在 hash 后
         if "#/" in list_url:
@@ -228,6 +234,7 @@ class MaoyanCrawler(BaseCrawler):
         if not isinstance(data, dict):
             return []
 
+        # Much more comprehensive Maoyan keys (newer responses often use these)
         for key in (
             "projects",
             "shows",
@@ -237,29 +244,52 @@ class MaoyanCrawler(BaseCrawler):
             "projectList",
             "data",
             "result",
+            "performances",
+            "items",
+            "content",
+            "pageData",
+            "resultData",
+            "dataList",
+            "listData",
+            "resultList",
+            "performanceList",
+            "projectList",
+            "itemList",
+            "showList",
+            "eventList",
+            "activities",
+            "recommend",
+            "recommendList",
         ):
             val = data.get(key)
             if isinstance(val, list) and val and isinstance(val[0], dict):
+                self.log.debug("maoyan extracted %s records from key=%s", len(val), key)
                 return val  # type: ignore[return-value]
             if isinstance(val, dict):
                 nested = self._extract_records(val)
                 if nested:
                     return nested
 
+        # Enhanced walk for nested objects (very common in Maoyan JSON)
         found: list[dict[str, Any]] = []
 
         def walk(node: Any) -> None:
             if isinstance(node, list) and node and isinstance(node[0], dict):
                 sample = node[0]
                 keys = {str(k).lower() for k in sample.keys()}
-                if keys & {"performanceid", "projectid", "showid", "id", "itemid"} and keys & {
+                if keys & {"performanceid", "projectid", "showid", "id", "itemid", "performanceid", "projectid"} and keys & {
                     "name",
                     "title",
                     "performancename",
                     "projectname",
                     "showname",
+                    "venue",
+                    "shop",
+                    "nameNoHtml",
+                    "title",
                 }:
                     found.extend(x for x in node if isinstance(x, dict))
+                    self.log.debug("maoyan walk found %s items", len(found))
                     return
             if isinstance(node, dict):
                 for v in node.values():
@@ -373,7 +403,23 @@ class MaoyanCrawler(BaseCrawler):
             ".list-item",
             "[class*='show-item']",
             "[class*='project-item']",
+            "[class*='performance-item']",
+            "[class*='item']",
             "a[href*='detail']",
+            ".performance",
+            ".item",
+            "[data-item-id]",
+            "[data-show-id]",
+            "[data-project-id]",
+            ".title",
+            ".name",
+            ".venue",
+            ".price",
+            ".time",
+            ".date",
+            "a[href*='/detail/']",
+            ".show-item",
+            ".performance-item",
         ]
         cards = []
         for sel in selectors:
@@ -390,14 +436,14 @@ class MaoyanCrawler(BaseCrawler):
                     href = (await link.get_attribute("href")) if link else ""
 
                 source_id = ""
-                for pattern in (r"detail[/=](\d+)", r"[?&]id=(\d+)", r"/(\d{5,})"):
+                for pattern in (r"detail[/=](\d+)", r"[?&]id=(\d+)", r"/(\d{5,})", r"itemId=(\d+)", r"showId=(\d+)", r"projectId=(\d+)"):
                     m = re.search(pattern, href or "")
                     if m:
                         source_id = m.group(1)
                         break
 
                 title_el = await card.query_selector(
-                    ".title, .name, [class*='title'], [class*='name'], h3, h2"
+                    ".title, .name, [class*='title'], [class*='name'], h3, h2, .item-title"
                 )
                 title = clean_text(await title_el.inner_text()) if title_el else ""
                 if not title:
@@ -405,14 +451,14 @@ class MaoyanCrawler(BaseCrawler):
                     title = full.split("\n", 1)[0] if full else ""
 
                 venue_el = await card.query_selector(
-                    ".venue, .address, [class*='venue'], [class*='address'], [class*='shop']"
+                    ".venue, .address, [class*='venue'], [class*='address'], [class*='shop'], .location"
                 )
                 venue = clean_text(await venue_el.inner_text()) if venue_el else ""
 
-                time_el = await card.query_selector(".time, [class*='time'], [class*='date']")
+                time_el = await card.query_selector(".time, [class*='time'], [class*='date'], .schedule")
                 start_raw = clean_text(await time_el.inner_text()) if time_el else ""
 
-                price_el = await card.query_selector(".price, [class*='price']")
+                price_el = await card.query_selector(".price, [class*='price'], .price-range")
                 price_raw = clean_text(await price_el.inner_text()) if price_el else ""
 
                 img_el = await card.query_selector("img")
@@ -450,6 +496,8 @@ class MaoyanCrawler(BaseCrawler):
             except Exception as exc:  # noqa: BLE001
                 self.log.debug("maoyan card parse error: %s", exc)
 
+        if items:
+            self.log.info("maoyan dom parse success: %s items found", len(items))
         return items
 
     @staticmethod
