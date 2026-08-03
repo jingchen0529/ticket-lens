@@ -4,10 +4,23 @@
 
 一个安装包装完即用，客户在界面上点「开始采集」，遇到验证码弹出真实浏览器窗口手动拖滑块，数据落本地 SQLite，可在界面查询、导出 CSV / Excel。
 
+## 命名说明
+
+历史原因存在四个名字，含义如下（对外统一用 **ticket-lens**，对内统一用 **daxi**）：
+
+| 名字 | 出现位置 | 说明 |
+| --- | --- | --- |
+| `ticket-lens` | 产品名、本文档标题 | 对客户呈现的名称 |
+| `daxi` | CLI 命令、环境变量前缀 `DAXI_`、数据库 `daxi.sqlite3` | 项目代号，内部统一使用 |
+| `daxicrawler` | `pyproject.toml` 包名 | Python 分发包名，与 CLI 分离 |
+| `damai` | 仓库目录名、`crawlers/damai/` | 历史遗留；爬虫上下文里仅指大麦这个数据源 |
+
+新增代码/文档时：内部标识用 `daxi`，数据源相关才用 `damai` / `maoyan`，不要再引入新别名。
+
 ## 形态与约束
 
 - **local-first 单客户**：后端只监听 `127.0.0.1`，无多租户、无鉴权，不面向公网。
-- **前后端固定端口 8756**：前端 `web/frontend/src/api.js` 的 `BACKEND_PORT` 与 `src-tauri/src/main.rs` 的 `BACKEND_PORT` 必须一致，Vite dev 代理也指向它。
+- **前后端固定端口 8756**：前端 `web/src/api.js` 的 `BACKEND_PORT` 与 `web/src-tauri/src/main.rs` 的 `BACKEND_PORT` 必须一致，Vite dev 代理也指向它。
 - **采集默认有头**：大麦几乎必弹验证码，界面提交任务时 `headed: true`，无头仅适合已有可用 cookie 的场景。
 - **同时只允许一个采集任务**：有头浏览器 + 单客户，第二次提交返回 409。
 
@@ -26,7 +39,9 @@
     core/paths.py     跨平台路径解析（打包后 data 目录、随包 Chromium）
   packaging/        PyInstaller spec + entry
   configs/default.yaml  配置模板
-web/frontend/       Vue 3 + Element Plus + Vite
+scripts/          生产运维脚本（数据迁移、详情回填），可直接对客户数据执行
+tools/            开发调试工具（dev 调试脚本 / cdp / probes 验证码探测），不进生产
+web/       Vue 3 + Element Plus + Vite
   src/views/          CrawlView 采集 / ShowsView 查询 / SettingsView 设置
   src/api.js          后端 API 封装（含 Tauri / 浏览器双环境判断）
   src-tauri/          Tauri 2 壳，负责拉起与回收后端子进程
@@ -48,7 +63,7 @@ daxi serve --port 8756        # 端口必须是 8756，前端按这个找后端
 前端：
 
 ```bash
-cd web/frontend
+cd web
 npm install
 npm run dev                   # 浏览器调页面，/api 由 vite 代理到 8756
 npm run tauri:dev             # 跑桌面壳（dev 模式不自动拉后端，需自己 daxi serve）
@@ -205,7 +220,7 @@ daxi crawl -s damai -c 北京 -p 1 --headed -v
 
 # 过码诊断：对照图 + A/B 网格 + validate code
 export DAXI_CAPTCHA_PROBE=1
-python scripts/bingtop_live_crawl.py --start 16 --end 18
+python tools/dev/bingtop_live_crawl.py --start 16 --end 18
 # 产物：
 #   data/captcha_probe/bingtop_live/last_compare.png   # 人工对照图（红raw/绿ui/蓝reveal）
 #   data/captcha_probe/bingtop_live/last_ab_grid.png   # A/B 映射网格
@@ -213,7 +228,7 @@ python scripts/bingtop_live_crawl.py --start 16 --end 18
 #   data/captcha_probe/bingtop_live/success_history.jsonl  # 仅 code=0
 
 # 离线用已有样本生成对照（0 点）
-python scripts/render_captcha_probe.py \
+python tools/dev/render_captcha_probe.py \
   --image data/captcha_probe/bingtop_1358/live_imageData.jpg \
   --ques  data/captcha_probe/bingtop_1358/live_ques.png \
   --raw 191

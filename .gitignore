@@ -17,6 +17,10 @@ build/
 
 # --- local data (SQLite 固定库 + 运行产物) ---
 data/
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 # 保留示例数据文件供测试
 !data/damai_search_items_merged.json
 !data/damai_search_items_p1-5.json
@@ -30,13 +34,12 @@ playwright-report/
 test-results/
 
 # --- frontend (web) ---
-web/frontend/node_modules/
-web/frontend/dist/
+web/node_modules/
+web/dist/
 
 # --- Tauri 打包产物 ---
 # Rust target 目录（包含所有编译产物和打包文件）
 web/src-tauri/target/
-web/frontend/src-tauri/target/
 
 # 各平台安装包（额外保险，防止意外放到其他位置）
 *.dmg
@@ -60,3 +63,6 @@ pw-browsers/
 *.swp
 *.swo
 *~
+
+# --- WorkBuddy 助手工作目录（本地记忆/技能，不入库）---
+.workbuddy/

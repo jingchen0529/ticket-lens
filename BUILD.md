@@ -40,7 +40,7 @@ GitHub Actions 页面手动运行 `Release`（`workflow_dispatch`）。手动触
 
 ### 开发模式
 ```bash
-cd web/frontend
+cd web
 npm install
 npm run tauri:dev
 ```
@@ -49,10 +49,10 @@ npm run tauri:dev
 
 ### macOS 打包
 ```bash
-cd web/frontend
+cd web
 npm run tauri:build:macos
 ```
-- **输出位置**: `web/frontend/src-tauri/target/universal-apple-darwin/release/bundle/dmg/`
+- **输出位置**: `web/src-tauri/target/universal-apple-darwin/release/bundle/dmg/`
 - **产物**: `daxi_*.dmg`
 
 > ⚠️ 这个 script 打的是 universal 壳，但 `packaging/dist/daxi` 里的
@@ -63,22 +63,22 @@ npm run tauri:build:macos
 > ⚠️ 必须在 Windows 系统上执行
 
 ```bash
-cd web/frontend
+cd web
 npm run tauri:build:windows
 ```
-- **输出位置**: `web/frontend/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`
+- **输出位置**: `web/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/`
 - **产物**: `daxi_*-setup.exe`
 
 ### Linux 打包
 > ⚠️ 必须在 Linux 系统上执行
 
 ```bash
-cd web/frontend
+cd web
 npm run tauri:build:linux
 ```
 - **输出位置**: 
-  - DEB: `web/frontend/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/`
-  - AppImage: `web/frontend/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/`
+  - DEB: `web/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/`
+  - AppImage: `web/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/`
 
 ## Git 策略
 
