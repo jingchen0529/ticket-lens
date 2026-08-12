@@ -16,7 +16,7 @@ build/
 .env
 
 # --- local data (SQLite 固定库 + 运行产物) ---
-data/
+/data/
 *.sqlite3
 *.sqlite3-journal
 *.sqlite3-wal
