@@ -147,6 +147,9 @@ class CrawlJob(BaseModel):
     )
     cities: list[str] = Field(default_factory=lambda: ["北京"])
     keywords: list[str] = Field(default_factory=list)
+    # 单平台分类；大麦映射 ctl，猫眼映射 categoryId；空字符串 = 全部分类。
+    # 多平台任务不共享分类体系，必须为空。
+    category: str = ""
     # 每个城市/关键词页数上限；0 = 不限制（跟列表 totalPage 采完）
     max_pages: int = 0
     # 列表拿到链接后是否再拉详情（场次/票档/场馆）
@@ -161,6 +164,11 @@ class CrawlResult(BaseModel):
     finished_at: datetime | None = None
     raw_count: int = 0
     show_count: int = 0
+    # show_count 是实际规范化入库行；台账查询固定隐藏展览休闲/体育，单独保留
+    # 可见与隐藏口径，避免任务结果看起来与数据查看页不一致。
+    ledger_visible_count: int | None = None
+    ledger_hidden_count: int | None = None
+    ledger_hidden_by_category: dict[str, int] = Field(default_factory=dict)
     by_source: dict[str, int] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
     output_path: str = ""

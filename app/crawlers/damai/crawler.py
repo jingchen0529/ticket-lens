@@ -2,20 +2,19 @@
 
 策略特点：
 - 列表数据走 search.damai.cn/searchajax.html（pageData.resultData）
-- 先打开一次 search.htm 建会话/cookie，再同页 fetch 翻页（避免每页整页刷新）
+- 先打开一次 search.htm 建会话/cookie，再用 BrowserContext.request 翻页
 - 命中 FAIL_SYS_USER_VALIDATE / 水果滑块时调用 captcha solver，同页重试
 - 首屏接口成功但无记录时回退 DOM 卡片解析
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
 from datetime import datetime
 from typing import Any, Sequence
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urljoin
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
@@ -23,7 +22,7 @@ from playwright.async_api import Page
 from app.browser.captcha.base import CaptchaSolver
 from app.crawlers.base import BaseCrawler, ItemCallback
 from app.crawlers.damai.captcha import DamaiCaptchaSolver
-from app.crawlers.damai.detail import enrich_items_detail
+from app.crawlers.damai.detail import DAMAI_DESKTOP_UA, enrich_items_detail
 from app.crawlers.damai.fruit_slider import CaptchaPayload, attach_payload_listener
 from app.models import RawShowItem, SourcePlatform
 from app.utils.text import clean_text
@@ -39,6 +38,25 @@ _DAMAI_API_HINTS = (
     "search.damai.cn",
     "mtop.alibaba.damai",
     "project/list",
+)
+
+_DAMAI_CHALLENGE_URL_MARKERS = (
+    "_____tmd_____",
+    "punish",
+    "captcha",
+    "x5sec",
+    "capslide",
+)
+
+# searchajax 偶尔会把大麦商城周边混进演出结果。这类记录通常落在
+# categoryid=51（“其他”），但没有 detail.damai.cn 演出详情；若继续富化，
+# subpage 只会返回一个缺少 itemBasicInfo 的成功空壳并触发无意义重试。
+_DAMAI_MERCHANDISE_TITLE_MARKERS = (
+    "官方荧光棒",
+    "官方应援棒",
+    "官方周边",
+    "演出周边",
+    "周边商品",
 )
 
 
@@ -58,6 +76,7 @@ class DamaiCrawler(BaseCrawler):
         cities: Sequence[str],
         keywords: Sequence[str],
         max_pages: int,
+        category: str = "",
         on_item: ItemCallback | None = None,
     ) -> list[RawShowItem]:
         items: list[RawShowItem] = []
@@ -69,9 +88,15 @@ class DamaiCrawler(BaseCrawler):
                 for keyword in kw_list:
                     pages_label = "全部" if not max_pages or max_pages <= 0 else str(max_pages)
                     self.log.info(
-                        "damai crawl city=%s keyword=%r pages=%s", city, keyword, pages_label
+                        "damai crawl city=%s category=%r keyword=%r pages=%s",
+                        city,
+                        category,
+                        keyword,
+                        pages_label,
                     )
-                    page_items = await self._crawl_city_keyword(page, city, keyword, max_pages)
+                    page_items = await self._crawl_city_keyword(
+                        page, city, keyword, max_pages, category
+                    )
                     # 同一项目可能同时命中多个关键词、城市入口或翻页响应。详情只拉一次，
                     # 展示条数由真实场次决定，不由列表接口重复返回次数决定。
                     for item in page_items:
@@ -86,14 +111,41 @@ class DamaiCrawler(BaseCrawler):
             # 列表完成后：用同一浏览器上下文拉 subpage，补全场次/票档/场馆
             if items and self._should_enrich_detail():
                 self.log.info("damai detail enrich start count=%s", len(items))
-                delay = float(getattr(self.config.crawl, "detail_delay_seconds", 0.35) or 0.35)
-                date_limit = int(getattr(self.config.crawl, "detail_date_limit", 40) or 40)
+                raw_delay = getattr(self.config.crawl, "detail_delay_seconds", 1.5)
+                delay = float(raw_delay) if raw_delay is not None else 1.5
+                raw_date_limit = getattr(self.config.crawl, "detail_date_limit", 0)
+                date_limit = int(raw_date_limit) if raw_date_limit is not None else 0
+                raw_retry_attempts = getattr(
+                    self.config.crawl, "detail_retry_attempts", 3
+                )
+                retry_attempts = (
+                    int(raw_retry_attempts) if raw_retry_attempts is not None else 3
+                )
+                raw_retry_delay = getattr(
+                    self.config.crawl, "detail_retry_delay_seconds", 2.0
+                )
+                retry_delay = (
+                    float(raw_retry_delay) if raw_retry_delay is not None else 2.0
+                )
+                raw_max_retry_backoff = getattr(
+                    self.config.crawl,
+                    "detail_retry_max_backoff_seconds",
+                    2.0,
+                )
+                max_retry_backoff = (
+                    float(raw_max_retry_backoff)
+                    if raw_max_retry_backoff is not None
+                    else 2.0
+                )
                 items = await enrich_items_detail(
                     page,
                     items,
                     delay_s=delay,
                     fetch_all_dates=True,
                     date_limit=date_limit,
+                    request_attempts=retry_attempts,
+                    retry_delay_s=retry_delay,
+                    max_retry_delay_s=max_retry_backoff,
                     on_item=on_item,
                 )
                 self.log.info(
@@ -171,6 +223,7 @@ class DamaiCrawler(BaseCrawler):
         city: str,
         keyword: str,
         max_pages: int,
+        category: str = "",
     ) -> list[RawShowItem]:
         """search.htm 建会话 → searchajax 翻页 → 风控时过验证后从当前页重试。"""
         collected: list[RawShowItem] = []
@@ -179,7 +232,7 @@ class DamaiCrawler(BaseCrawler):
         detach_early = await self._attach_early_payload_listener(page)
         try:
             return await self._crawl_city_keyword_body(
-                page, city, keyword, max_pages, collected
+                page, city, keyword, max_pages, collected, category
             )
         finally:
             try:
@@ -195,9 +248,10 @@ class DamaiCrawler(BaseCrawler):
         keyword: str,
         max_pages: int,
         collected: list[RawShowItem],
+        category: str = "",
     ) -> list[RawShowItem]:
         # 1) 打开搜索页一次，建立 XSRF / 站点 cookie（会顺带打一发 currPage=1）
-        entry = self._build_search_url(city, keyword, 1)
+        entry = self._build_search_url(city, keyword, 1, category)
         try:
             await self.goto(page, entry, wait_until="domcontentloaded")
         except RuntimeError as exc:
@@ -228,6 +282,7 @@ class DamaiCrawler(BaseCrawler):
                     city=city,
                     keyword=keyword,
                     page_no=page_no,
+                    category=category,
                 )
             except _SearchAjaxError as exc:
                 fetch_error = exc
@@ -337,65 +392,92 @@ class DamaiCrawler(BaseCrawler):
         city: str,
         keyword: str,
         page_no: int,
+        category: str = "",
         timeout_ms: int = 12000,
     ) -> dict[str, Any] | list[Any]:
-        """在已打开的 search 域页面内 fetch searchajax（带 cookie）。
+        """通过 BrowserContext.request 请求 searchajax（共享浏览器 cookie）。
 
-        必须带 AbortController：风控/punish 时接口常挂起不返回，无超时会把整条
-        采集链路卡死（永远进不到 captcha solver）。
+        请求不依赖页面 JS execution context，因此页面刷新或风控导航不会中断它。
+        禁止自动跟随重定向，以便把 punish/captcha Location 交给现有验证码流程。
         """
-        url = self._build_ajax_url(city, keyword, page_no)
-        # 外层 wait_for 比 JS abort 略宽一点，避免竞态
-        outer_timeout = max(5.0, (timeout_ms / 1000.0) + 3.0)
+        url = self._build_ajax_url(city, keyword, page_no, category)
+        referer = self._build_search_url(city, keyword, 1, category)
+        configured_ua = str(getattr(self.config.browser, "user_agent", "") or "").strip()
+        user_agent = (configured_ua or DAMAI_DESKTOP_UA).replace("HeadlessChrome", "Chrome")
+        response = None
         try:
-            raw = await asyncio.wait_for(
-                page.evaluate(
-                    """async ({ ajaxUrl, timeoutMs }) => {
-                      const ctrl = new AbortController();
-                      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-                      try {
-                        const r = await fetch(ajaxUrl, {
-                          credentials: 'include',
-                          signal: ctrl.signal,
-                          headers: {
-                            accept: 'application/json, text/plain, */*',
-                            'x-requested-with': 'XMLHttpRequest',
-                          },
-                        });
-                        const text = await r.text();
-                        try { return JSON.parse(text); } catch (e) {
-                          return { _parse_error: true, status: r.status, text: text.slice(0, 500) };
-                        }
-                      } catch (e) {
-                        const name = (e && e.name) || '';
-                        const msg = (e && e.message) || String(e);
-                        return {
-                          _fetch_error: true,
-                          aborted: name === 'AbortError' || /abort/i.test(msg),
-                          error: msg.slice(0, 200),
-                        };
-                      } finally {
-                        clearTimeout(timer);
-                      }
-                    }""",
-                    {"ajaxUrl": url, "timeoutMs": int(timeout_ms)},
-                ),
-                timeout=outer_timeout,
+            response = await page.context.request.get(
+                url,
+                timeout=timeout_ms,
+                max_retries=1,
+                max_redirects=0,
+                headers={
+                    "accept": "application/json, text/plain, */*",
+                    "accept-language": "zh-CN,zh;q=0.9",
+                    "referer": referer,
+                    "user-agent": user_agent,
+                    "x-requested-with": "XMLHttpRequest",
+                },
             )
-        except asyncio.TimeoutError:
-            raise _SearchAjaxError(f"outer timeout after {outer_timeout:.1f}s")
-        except Exception as exc:  # noqa: BLE001
-            raise _SearchAjaxError(f"page evaluate failed: {exc}") from exc
-        if isinstance(raw, dict) and raw.get("_fetch_error"):
+            challenge_url = self._challenge_url_from_response(
+                response.url,
+                response.headers,
+            )
+            if challenge_url:
+                return {
+                    "ret": ["FAIL_SYS_USER_VALIDATE"],
+                    "data": {"url": challenge_url},
+                }
+
+            text = await response.text()
+            raw = self._try_parse_json(text)
+            if isinstance(raw, (dict, list)):
+                return raw
+
+            challenge_url = self._challenge_url_from_response(
+                response.url,
+                response.headers,
+                text,
+            )
+            if challenge_url:
+                return {
+                    "ret": ["FAIL_SYS_USER_VALIDATE"],
+                    "data": {"url": challenge_url},
+                }
+            if not response.ok:
+                raise _SearchAjaxError(f"http status={response.status}")
+            content_type = str(response.headers.get("content-type") or "unknown")
             raise _SearchAjaxError(
-                f"fetch error aborted={bool(raw.get('aborted'))}: "
-                f"{str(raw.get('error') or 'unknown error')[:200]}"
+                f"non-json response status={response.status} content-type={content_type[:80]}"
             )
-        if isinstance(raw, dict) and raw.get("_parse_error"):
-            raise _SearchAjaxError(f"non-json response status={raw.get('status')}")
-        if isinstance(raw, (dict, list)):
-            return raw  # type: ignore[return-value]
-        raise _SearchAjaxError(f"unexpected response type={type(raw).__name__}")
+        except _SearchAjaxError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise _SearchAjaxError(f"context request failed: {str(exc)[:240]}") from exc
+        finally:
+            if response is not None:
+                try:
+                    await response.dispose()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    @staticmethod
+    def _challenge_url_from_response(
+        response_url: str,
+        headers: dict[str, str],
+        body: str = "",
+    ) -> str | None:
+        base_url = response_url or SEARCH_AJAX_URL
+        candidates = [str(headers.get("location") or ""), response_url]
+        if body:
+            candidates.extend(re.findall(r"https?://[^\s\"'<>]+", body[:4000], re.I))
+        for candidate in candidates:
+            if not candidate:
+                continue
+            resolved = urljoin(base_url, candidate)
+            if any(marker in resolved.lower() for marker in _DAMAI_CHALLENGE_URL_MARKERS):
+                return resolved
+        return None
 
     async def _maybe_solve_captcha(self, page: Page) -> bool:
         hint = self._latest_early_payload()
@@ -437,11 +519,14 @@ class DamaiCrawler(BaseCrawler):
                 return url
         return None
 
-    def _build_search_url(self, city: str, keyword: str, page_no: int) -> str:
+    def _build_search_url(
+        self, city: str, keyword: str, page_no: int, category: str = ""
+    ) -> str:
         base = self.config.sources.damai.search_url or "https://search.damai.cn/search.htm"
         params: dict[str, str] = {
             "order": "1",
             "cty": city or "",
+            "ctl": category or "",
             "currPage": str(page_no),
         }
         if keyword:
@@ -451,11 +536,13 @@ class DamaiCrawler(BaseCrawler):
             params["keyword"] = ""
         return f"{base}?{urlencode(params, quote_via=quote)}"
 
-    def _build_ajax_url(self, city: str, keyword: str, page_no: int) -> str:
+    def _build_ajax_url(
+        self, city: str, keyword: str, page_no: int, category: str = ""
+    ) -> str:
         params = {
             "keyword": keyword or "",
             "cty": city or "",
-            "ctl": "",
+            "ctl": category or "",
             "sctl": "",
             "tsg": "0",
             "st": "",
@@ -578,6 +665,26 @@ class DamaiCrawler(BaseCrawler):
         if not title and not source_id:
             return None
 
+        category_id = str(rec.get("categoryid") or rec.get("categoryId") or "")
+        category = clean_text(
+            str(
+                rec.get("categoryName")
+                or rec.get("categoryname")
+                or rec.get("category")
+                or ""
+            )
+        )
+        if category_id == "51" and any(
+            marker in title for marker in _DAMAI_MERCHANDISE_TITLE_MARKERS
+        ):
+            self.log.info(
+                "damai skip merchandise item=%s category=%s title=%s",
+                source_id or "-",
+                category or "-",
+                title,
+            )
+            return None
+
         venue = clean_text(str(rec.get("venue") or rec.get("venueName") or rec.get("venue_name") or ""))
         price_raw = clean_text(
             str(rec.get("priceStr") or rec.get("price_str") or rec.get("price") or rec.get("priceLow") or "")
@@ -597,7 +704,6 @@ class DamaiCrawler(BaseCrawler):
                 or ""
             )
         )
-        category = clean_text(str(rec.get("categoryName") or rec.get("categoryname") or rec.get("category") or ""))
         poster = str(rec.get("verticalPic") or rec.get("poster") or rec.get("imgUrl") or rec.get("pic") or "")
         url = str(rec.get("projectLink") or rec.get("url") or "")
         if source_id and not url:

@@ -40,6 +40,25 @@ _MAOYAN_CITY_IDS = {
     "银川": 39,
 }
 
+_MAOYAN_CATEGORY_IDS = {
+    "演唱会": 1,
+    "话剧音乐剧": 4,
+    "音乐节": 10,
+    "脱口秀": 15,
+    "音乐会": 6,
+    "戏曲艺术": 3,
+    "沉浸剧场": 14,
+    "相声": 16,
+    "休闲展览": 9,
+    "亲子演出": 7,
+    "舞蹈芭蕾": 5,
+    "Livehouse": 17,
+    "电竞赛事": 12,
+    "体育赛事": 2,
+    "剧本杀": 13,
+    "其他": 8,
+}
+
 
 def _get_city_id(city: str) -> int:
     """将城市名映射为猫眼 cityId。"""
@@ -58,6 +77,7 @@ class MaoyanCrawler(BaseCrawler):
         cities: Sequence[str],
         keywords: Sequence[str],
         max_pages: int,
+        category: str = "",
         on_item: ItemCallback | None = None,
     ) -> list[RawShowItem]:
         items: list[RawShowItem] = []
@@ -69,9 +89,15 @@ class MaoyanCrawler(BaseCrawler):
                 for keyword in kw_list:
                     pages_label = "全部" if not max_pages or max_pages <= 0 else str(max_pages)
                     self.log.info(
-                        "maoyan crawl city=%s keyword=%r pages=%s", city, keyword, pages_label
+                        "maoyan crawl city=%s category=%r keyword=%r pages=%s",
+                        city,
+                        category,
+                        keyword,
+                        pages_label,
                     )
-                    page_items = await self._crawl_city_keyword(page, city, keyword, max_pages)
+                    page_items = await self._crawl_city_keyword(
+                        page, city, keyword, max_pages, category
+                    )
                     for item in page_items:
                         key = item.source_id or item.url
                         if key and key in seen_projects:
@@ -91,10 +117,19 @@ class MaoyanCrawler(BaseCrawler):
         city: str,
         keyword: str,
         max_pages: int,
+        category: str = "",
     ) -> list[RawShowItem]:
         collected: list[RawShowItem] = []
         city_id = _get_city_id(city)
-        self.log.info("maoyan mobile API crawl: city=%s cityId=%s keyword=%r", city, city_id, keyword)
+        category_id = self._category_id(category)
+        self.log.info(
+            "maoyan mobile API crawl: city=%s cityId=%s category=%r categoryId=%s keyword=%r",
+            city,
+            city_id,
+            category,
+            category_id,
+            keyword,
+        )
 
         page_cap = max_pages if max_pages and max_pages > 0 else 5
         page_no = 1
@@ -102,10 +137,7 @@ class MaoyanCrawler(BaseCrawler):
 
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
             while page_no <= page_cap:
-                api_url = (
-                    f"https://m.dianping.com/myshow/ajax/performances/{city_id}"
-                    f";st=0;p={page_no};s=10;tft=0?cityId={city_id}&sellChannel=7"
-                )
+                api_url = self._build_api_url(city_id, page_no, category)
                 self.log.info("maoyan fetching page=%s", page_no)
 
                 try:
@@ -157,6 +189,22 @@ class MaoyanCrawler(BaseCrawler):
 
         self.log.info("maoyan crawl finished: city=%s total_items=%s", city, len(collected))
         return collected
+
+    @staticmethod
+    def _category_id(category: str) -> int:
+        if not category:
+            return 0
+        try:
+            return _MAOYAN_CATEGORY_IDS[category]
+        except KeyError as exc:
+            raise ValueError(f"unknown maoyan category: {category}") from exc
+
+    def _build_api_url(self, city_id: int, page_no: int, category: str = "") -> str:
+        category_id = self._category_id(category)
+        return (
+            f"https://m.dianping.com/myshow/ajax/performances/{category_id}"
+            f";st=0;p={page_no};s=10;tft=0?cityId={city_id}&sellChannel=7"
+        )
 
     def _build_list_url(self, city: str, keyword: str, page_no: int) -> str:
         """构造猫眼演出列表 / 搜索 URL。
@@ -367,7 +415,15 @@ class MaoyanCrawler(BaseCrawler):
                 or ""
             )
         )
-        category = clean_text(str(rec.get("categoryName") or rec.get("category") or rec.get("typeName") or ""))
+        category = clean_text(
+            str(
+                rec.get("categoryName")
+                or rec.get("cornerDisplayName")
+                or rec.get("category")
+                or rec.get("typeName")
+                or ""
+            )
+        )
         poster = str(
             rec.get("posterUrl")
             or rec.get("poster")

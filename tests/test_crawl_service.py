@@ -18,7 +18,12 @@ async def test_run_crawl_records_crawler_error(monkeypatch, tmp_path):
     config.storage.backend = "json"
     config.storage.output_dir = str(tmp_path)
     config.storage.run_subdir = False
-    job = CrawlJob(sources=[SourcePlatform.DAMAI], cities=["上海"], max_pages=1)
+    job = CrawlJob(
+        sources=[SourcePlatform.DAMAI],
+        cities=["上海"],
+        category="演唱会",
+        max_pages=1,
+    )
 
     session = SimpleNamespace(save_platform_cookies=AsyncMock())
 
@@ -36,6 +41,7 @@ async def test_run_crawl_records_crawler_error(monkeypatch, tmp_path):
     assert result.raw_count == 0
     assert result.show_count == 0
     assert result.by_source == {}
+    assert crawler.crawl.await_args.kwargs["category"] == "演唱会"
 
 
 @pytest.mark.asyncio
@@ -50,6 +56,7 @@ async def test_run_crawl_persists_split_rows_before_crawler_finishes(monkeypatch
         source=SourcePlatform.DAMAI,
         source_id="stream-1",
         title="即时拆分",
+        category="体育",
         sessions_raw=[
             {"id": "a", "start_time": "2026-08-01 15:00", "date_key": "20260801"},
             {"id": "b", "start_time": "2026-08-01 19:30", "date_key": "20260801"},
@@ -75,3 +82,6 @@ async def test_run_crawl_persists_split_rows_before_crawler_finishes(monkeypatch
 
     assert result.raw_count == 1
     assert result.show_count == 2
+    assert result.ledger_visible_count == 0
+    assert result.ledger_hidden_count == 2
+    assert result.ledger_hidden_by_category == {"体育": 2}

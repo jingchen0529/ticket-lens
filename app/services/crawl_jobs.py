@@ -25,18 +25,32 @@ from typing import Any, Optional
 from app.core.config import AppConfig, load_config
 from app.models import CrawlJob, CrawlResult
 from app.services.crawl import run_crawl
+from app.utils.task_log_translation import translate_task_error, translate_task_log
 
 logger = logging.getLogger(__name__)
 
 # 前端 Console 只关心采集/验证码相关 logger，避免 uvicorn access 刷屏
 _LOG_NAME_PREFIXES = (
-    "captcha.",
-    "crawler.",
-    "app.services.crawl",
-    "app.browser.",
-    "app.crawlers.",
+    "captcha",
+    "crawler",
+    "app",
+    "damai",
+    "maoyan",
+    "showstart",
 )
-_MAX_JOB_LOGS = 300
+_MAX_JOB_LOGS = 10000
+_LEDGER_HIDDEN_LABEL = "展览休闲/体育"
+
+
+def _result_ledger_counts(result: CrawlResult) -> tuple[int, int]:
+    """兼容旧/测试结果：未携带新字段时按全部可见处理。"""
+    hidden = result.ledger_hidden_count
+    if hidden is None:
+        hidden = sum(result.ledger_hidden_by_category.values())
+    visible = result.ledger_visible_count
+    if visible is None:
+        visible = max(0, result.show_count - hidden)
+    return int(visible), int(hidden)
 
 
 class JobState(str, Enum):
@@ -72,13 +86,21 @@ class _JobLogHandler(logging.Handler):
             msg = log_record.getMessage()
             if not msg or not str(msg).strip():
                 return
-            # 过长堆栈只留首行，避免 Console 被 traceback 淹没
-            text = str(msg).strip()
-            if "\n" in text:
-                text = text.split("\n", 1)[0].strip()
-            if len(text) > 500:
-                text = text[:497] + "..."
-            self._record.append_log(_level_name(log_record.levelno), text)
+            raw_text = str(msg).strip()
+            # 如果日志包含多行（如堆栈或多行摘要），逐行解开追加，完整保留所有输出
+            lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+            for line in lines:
+                level = _level_name(log_record.levelno)
+                translated = translate_task_log(
+                    line,
+                    level=level,
+                    logger_name=name,
+                )
+                if not translated:
+                    continue
+                if len(translated) > 2000:
+                    translated = translated[:1997] + "..."
+                self._record.append_log(level, translated)
         except Exception:  # noqa: BLE001
             self.handleError(log_record)
 
@@ -134,6 +156,7 @@ class JobRecord:
                 "sources": [s.value for s in self.job.sources],
                 "cities": self.job.cities,
                 "keywords": self.job.keywords,
+                "category": self.job.category,
                 "max_pages": self.job.max_pages,
                 "enrich_detail": bool(getattr(self.job, "enrich_detail", True)),
             },
@@ -150,11 +173,15 @@ class JobRecord:
         r = self.result
         if r is None:
             return None
+        visible, hidden = _result_ledger_counts(r)
         return {
             "raw_count": r.raw_count,
             "show_count": r.show_count,
+            "ledger_visible_count": visible,
+            "ledger_hidden_count": hidden,
+            "ledger_hidden_by_category": dict(r.ledger_hidden_by_category),
             "by_source": r.by_source,
-            "errors": r.errors,
+            "errors": [translate_task_error(err) for err in r.errors],
             "output_path": r.output_path,
         }
 
@@ -191,10 +218,12 @@ class CrawlJobManager:
             record = JobRecord(id=uuid.uuid4().hex, job=job)
             cities = "、".join(job.cities) if job.cities else "-"
             pages_label = "全部" if not job.max_pages or job.max_pages <= 0 else str(job.max_pages)
+            category_label = job.category or "全部分类"
             detail_label = "开" if getattr(job, "enrich_detail", True) else "关"
             record.append_log(
                 "INFO",
-                f"任务已提交 id={record.id[:8]} 城市={cities} 页数={pages_label} 详情补全={detail_label}",
+                f"任务已提交：任务编号 {record.id[:8]}，城市 {cities}，"
+                f"分类 {category_label}，页数 {pages_label}，详情补全 {detail_label}",
             )
             self._jobs[record.id] = record
             self._active_id = record.id
@@ -217,7 +246,7 @@ class CrawlJobManager:
     async def _run(self, record: JobRecord, config: AppConfig) -> None:
         record.state = JobState.RUNNING
         record.started_at = datetime.utcnow()
-        record.append_log("INFO", "开始采集：启动浏览器并进入大麦搜索…")
+        record.append_log("INFO", "开始采集：正在启动采集环境…")
 
         handler = _JobLogHandler(record)
         root = logging.getLogger()
@@ -239,22 +268,41 @@ class CrawlJobManager:
         try:
             result = await run_crawl(record.job, config)
             record.result = result
-            record.state = JobState.SUCCEEDED
+            visible_count, hidden_count = _result_ledger_counts(result)
+            result_summary = (
+                f"入库 {result.show_count} 条、台账可见 {visible_count} 条、"
+                f"隐藏{_LEDGER_HIDDEN_LABEL} {hidden_count} 条"
+            )
             if result.errors:
-                for err in result.errors:
-                    record.append_log("ERROR", err)
+                record.state = JobState.FAILED
+                translated_errors = [translate_task_error(err) for err in result.errors]
+                record.error = "；".join(translated_errors)
+                for err in translated_errors:
+                    # run_crawl normally logged "crawler failed: <err>" already. Only
+                    # synthesize a row for alternate implementations that returned an
+                    # error without logging it, so the console does not show duplicates.
+                    if not any(
+                        row.get("level") == "ERROR" and err in (row.get("text") or "")
+                        for row in record.logs
+                    ):
+                        record.append_log("ERROR", err)
                 record.append_log(
-                    "WARN",
-                    f"采集结束（含错误）入库 {result.show_count} 条 / 原始 {result.raw_count} 条",
+                    "ERROR",
+                    f"采集失败：{result_summary} / 原始 {result.raw_count} 条",
                 )
             else:
+                record.state = JobState.SUCCEEDED
                 record.append_log(
                     "INFO",
-                    f"采集完成：入库 {result.show_count} 条 / 原始 {result.raw_count} 条",
+                    f"采集完成：{result_summary} / 原始 {result.raw_count} 条",
                 )
             logger.info(
-                "crawl job done id=%s shows=%s errors=%s",
-                record.id, result.show_count, len(result.errors),
+                "crawl job done id=%s shows=%s ledger_visible=%s ledger_hidden=%s errors=%s",
+                record.id,
+                result.show_count,
+                visible_count,
+                hidden_count,
+                len(result.errors),
             )
         except asyncio.CancelledError:
             record.state = JobState.CANCELLED
@@ -264,8 +312,8 @@ class CrawlJobManager:
             raise
         except Exception as exc:  # noqa: BLE001
             record.state = JobState.FAILED
-            record.error = str(exc)
-            record.append_log("ERROR", f"任务异常中断: {exc}")
+            record.error = translate_task_error(str(exc))
+            record.append_log("ERROR", f"任务异常中断：{record.error}")
             logger.exception("crawl job failed id=%s: %s", record.id, exc)
         finally:
             root.removeHandler(handler)

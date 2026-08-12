@@ -95,6 +95,35 @@ def test_max_pages_zero_and_null_mean_all(monkeypatch):
     assert req_n.max_pages == 12
 
 
+def test_damai_category_request_and_job_payload():
+    from app.routers.crawl import CrawlRequest
+    from app.services.crawl_jobs import JobRecord
+
+    req = CrawlRequest(sources=["damai"], cities=["北京"], category="音乐会")
+    job = CrawlJob(
+        sources=[SourcePlatform.DAMAI],
+        cities=req.cities or [],
+        category=req.category.strip(),
+    )
+
+    assert req.category == "音乐会"
+    assert JobRecord(id="category-job", job=job).to_dict()["job"]["category"] == "音乐会"
+
+
+def test_category_only_applies_to_single_platform():
+    from app.routers.crawl import _category_for_sources
+
+    assert _category_for_sources([SourcePlatform.DAMAI], " 音乐会 ") == "音乐会"
+    assert _category_for_sources([SourcePlatform.MAOYAN], " 演唱会 ") == "演唱会"
+    assert (
+        _category_for_sources(
+            [SourcePlatform.DAMAI, SourcePlatform.MAOYAN],
+            "演唱会",
+        )
+        == ""
+    )
+
+
 # ---------- 异步并发 / 状态流转（直接驱动 manager） ----------
 
 
@@ -135,9 +164,16 @@ async def test_submit_and_succeed(monkeypatch):
     await asyncio.wait_for(rec._task, timeout=2)
     assert rec.state.value == "succeeded"
     assert rec.result.show_count == 4
+    result_payload = rec.to_dict()["result"]
+    assert result_payload["ledger_visible_count"] == 4
+    assert result_payload["ledger_hidden_count"] == 0
     # 完成后 active 释放，且有结束日志
     assert mgr.active is None
-    assert any("采集完成" in (row.get("text") or "") for row in rec.logs)
+    assert any(
+        "采集完成：入库 4 条、台账可见 4 条、隐藏展览休闲/体育 0 条"
+        in (row.get("text") or "")
+        for row in rec.logs
+    )
 
 
 @pytest.mark.asyncio
@@ -148,6 +184,7 @@ async def test_job_logs_capture_captcha_logger(monkeypatch):
     import app.services.crawl_jobs as cj
 
     async def _run_with_captcha_log(job: CrawlJob, config) -> CrawlResult:
+        error = "damai: damai captcha solver failed city=北京 keyword='' page=1"
         logging.getLogger("captcha.damai").warning(
             "[damai] captcha detected kind=slider reason=fruit_slider_ui"
         )
@@ -157,6 +194,7 @@ async def test_job_logs_capture_captcha_logger(monkeypatch):
         logging.getLogger("captcha.damai").warning(
             "[damai] auto failed, fallback manual: fruit slider rejected or not cleared"
         )
+        logging.getLogger("app.services.crawl").error("crawler failed: %s", error)
         await asyncio.sleep(0.02)
         return CrawlResult(
             job=job,
@@ -164,7 +202,7 @@ async def test_job_logs_capture_captcha_logger(monkeypatch):
             finished_at=datetime.utcnow(),
             raw_count=0,
             show_count=0,
-            errors=["damai: damai captcha solver failed city=北京 keyword='' page=1"],
+            errors=[error],
         )
 
     monkeypatch.setattr(cj, "run_crawl", _run_with_captcha_log)
@@ -174,12 +212,22 @@ async def test_job_logs_capture_captcha_logger(monkeypatch):
     await asyncio.wait_for(rec._task, timeout=2)
 
     texts = " | ".join(row["text"] for row in rec.logs)
-    assert "captcha detected" in texts
-    assert "no newslidecaptcha payload" in texts
-    assert "fallback manual" in texts
+    assert "大麦网触发安全验证" in texts
+    assert "验证码模块出现可恢复异常" in texts
+    assert "已转为人工验证" in texts
     assert any(row["level"] == "WARN" for row in rec.logs)
     # result.errors 也会写入 ERROR 行
-    assert any(row["level"] == "ERROR" and "captcha solver failed" in row["text"] for row in rec.logs)
+    assert any(
+        row["level"] == "ERROR" and "验证码自动处理失败" in row["text"]
+        for row in rec.logs
+    )
+    assert sum("验证码自动处理失败" in row["text"] for row in rec.logs) == 1
+    assert rec.state.value == "failed"
+    assert rec.error == (
+        "大麦网验证码自动处理失败"
+        "（城市：北京，关键词：无，第 1 页）"
+    )
+    assert rec.to_dict()["result"]["errors"] == [rec.error]
 
 
 @pytest.mark.asyncio

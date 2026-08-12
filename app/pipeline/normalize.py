@@ -54,6 +54,28 @@ def _parse_session_start(raw_session: dict) -> datetime | None:
     return parse_chinese_datetime(raw_time)
 
 
+def _is_date_range(raw_time: str) -> bool:
+    """列表档期范围不是具体场次，不能据此伪造 00:00 场次。"""
+    text = clean_text(raw_time)
+    return bool(
+        re.search(
+            r"\d{4}[./]\d{1,2}[./]\d{1,2}\s*[-~—至]\s*"
+            r"(?:\d{4}[./])?\d{1,2}[./]\d{1,2}",
+            text,
+        )
+        or re.search(
+            r"\d{4}年\d{1,2}月\d{1,2}日?\s*[-~—至]\s*"
+            r"(?:\d{4}年)?\d{1,2}月\d{1,2}日?",
+            text,
+        )
+        or re.search(
+            r"\d{4}-\d{1,2}-\d{1,2}\s+(?:-|~|—|至)\s+"
+            r"\d{4}-\d{1,2}-\d{1,2}",
+            text,
+        )
+    )
+
+
 def map_status(raw: str | None) -> ShowStatus:
     text = (raw or "").strip().lower()
     if not text:
@@ -176,8 +198,8 @@ def normalize_one(raw: RawShowItem) -> Show | None:
             )
         )
 
-    # 若无场次但有列表时间，补一条主场次
-    if not sessions and (start or raw.start_time_raw):
+    # 单个明确时间可补主场次；日期范围只是项目档期，不能伪造成午夜场次。
+    if not sessions and (start or raw.start_time_raw) and not _is_date_range(raw.start_time_raw):
         sessions.append(
             ShowSession(
                 start_time=start,
@@ -249,6 +271,15 @@ def normalize_one(raw: RawShowItem) -> Show | None:
             "price_ladder": price.raw if "|" in (price.raw or "") else "",
             "from_api": raw.raw_payload.get("from_api"),
             "detail_enriched": bool(detail_blob),
+            "detail_complete": bool(detail_blob.get("detail_complete", bool(raw.sessions_raw))),
+            "calendar_date_count": int(detail_blob.get("calendar_date_count") or 0),
+            "calendar_dates_fetched": int(detail_blob.get("calendar_dates_fetched") or 0),
+            "calendar_dates_failed": detail_blob.get("calendar_dates_failed") or [],
+            "ticket_sessions_requested": int(
+                detail_blob.get("ticket_sessions_requested") or 0
+            ),
+            "ticket_sessions_fetched": int(detail_blob.get("ticket_sessions_fetched") or 0),
+            "ticket_sessions_failed": detail_blob.get("ticket_sessions_failed") or [],
             "session_count": len(sessions),
             "ticket_tier_count": sum(len(s.ticket_tiers) for s in sessions),
             # 演出二级分类：大麦 record.subcategoryname（如 话剧/音乐会/儿童剧）

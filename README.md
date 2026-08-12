@@ -113,6 +113,10 @@ export DAXI_CAPTCHA_PASSWORD=...
 
 任务状态目前只有 `pending / running / succeeded / failed` 这一层，没有「第几页 / 当前城市」的细粒度进度，所以界面进度条较粗。
 
+提交单平台任务时可传 `category`：大麦任务将其作为搜索接口的一级分类 `ctl`，
+猫眼任务将分类名映射为列表接口的 `categoryId`。空字符串或不传表示全部分类；
+同时采集大麦和猫眼时不显示或应用分类筛选。
+
 ## 数据
 
 统一 `Show` 模型字段：`id`（`{source}:{source_id}`）、`source`、`title`、`category`、`artists`、`venue.{name,city,address}`、`price.{min_price,max_price,raw}`、`status`、`start_time`、`sessions`、`url`、`poster_url`、`extras`。查询时另即时派生 `holiday`（节假日）与 `perf_state`（按当前日期比较出的演出状态），不落库，保证查询与导出口径一致。
@@ -303,6 +307,11 @@ uv pip compile pyproject.toml --extra dev -o requirements-dev.lock
 ### 配置
 
 配置模板位于 `configs/default.yaml`，首次运行时会复制到用户数据目录供编辑。详见 [`configs/default.yaml`](configs/default.yaml)。
+
+大麦详情采集默认使用全局 1.5 秒节拍（附加随机抖动），单请求最多
+尝试 3 次，每次失败固定等待 2 秒。PC 详情不可用时会自动改用官方
+`m.damai.cn` / `mtop.damai.cn` 移动端详情；移动端仍失败则跳过当前项目并
+继续下一个，不再进行 90 秒整项目冷却，也不会中止整批任务。
 
 项目根目录的 `.env.example` 列出了所有可用环境变量:
 - `DAXI_DATA_DIR` - 数据存储位置

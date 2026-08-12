@@ -1,6 +1,6 @@
 """大麦详情页：场次 / 票档 / 场馆补全。
 
-列表 searchajax 只有项目摘要；场次与票档在详情 subpage 接口：
+列表 searchajax 只有项目摘要；常规场次与票档在详情 subpage 接口：
 
   GET https://detail.damai.cn/subpage
     ?itemId=...&apiVersion=2.0&dmChannel=pc@damai_pc
@@ -10,8 +10,11 @@
 
 响应为 JSONP：__jp0({...})。
 
-在已建立 cookie 的 Playwright page 上用 page.evaluate(fetch) 调用，
-避免 headless 直接 goto detail 被 302 到 404。
+若 PC 详情返回业务 404 / 项目编号不匹配，则切换官方移动端
+``m.damai.cn`` 对应的 MTop 详情协议，恢复基础资料和完整场次。
+
+在已建立 cookie 的 Playwright page 上用 BrowserContext.request 调用，
+避免 headless 直接 goto detail 被 302 到 404，也不依赖页面 JS 上下文。
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import asyncio
 import inspect
 import json
 import logging
+import random
 import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -28,10 +32,37 @@ from urllib.parse import unquote, urlencode
 
 from playwright.async_api import Page
 
+from app.crawlers.damai.mobile_detail import (
+    fetch_mobile_item_detail,
+    mobile_detail_url,
+)
 from app.models import RawShowItem
 from app.utils.text import clean_text
 
 logger = logging.getLogger(__name__)
+
+
+class DetailCompletenessError(RuntimeError):
+    """详情重试耗尽后仍不完整；调用方不得把该项目当成功入库。"""
+
+
+class _SubpageRequestPacer:
+    """全局 subpage 请求节拍器，避免长档期项目形成突发流量。"""
+
+    def __init__(self, interval_s: float) -> None:
+        self.interval_s = max(0.0, float(interval_s))
+        self.jitter_s = self.interval_s * 0.25
+        self._next_at = 0.0
+
+    async def wait_turn(self) -> None:
+        if self.interval_s <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        wait_s = self._next_at - loop.time()
+        if wait_s > 0:
+            await asyncio.sleep(wait_s)
+        jitter = random.uniform(0.0, self.jitter_s)
+        self._next_at = loop.time() + self.interval_s + jitter
 
 SUBPAGE_BASE = "https://detail.damai.cn/subpage"
 ITEM_PAGE = "https://detail.damai.cn/item.htm"
@@ -40,7 +71,7 @@ ITEM_PAGE = "https://detail.damai.cn/item.htm"
 # context.request 是独立 HTTP 栈，默认 UA（APIRequest/…）或 headless 的
 # HeadlessChrome 会被判为非浏览器请求，直接返回裸 "error" 或空 body，导致
 # 95% 详情拉取失败、场次全丢。请求必须带一个正常浏览器 UA。
-_FALLBACK_UA = (
+DAMAI_DESKTOP_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/126.0.0.0 Safari/537.36"
@@ -55,7 +86,7 @@ async def _browser_ua(page: Page) -> str:
         ua = ""
     ua = str(ua or "").strip()
     if not ua:
-        return _FALLBACK_UA
+        return DAMAI_DESKTOP_UA
     # headless 的 "HeadlessChrome/…" 同样会被识别为非真人浏览器
     return ua.replace("HeadlessChrome", "Chrome")
 
@@ -156,12 +187,29 @@ def _parse_price(val: Any) -> float | None:
 
 
 def _perform_begin_to_raw(begin: str | None, name: str | None) -> str:
-    """202608141900 → 2026-08-14 19:00；名称仅在结构化时间缺失时兜底。"""
+    """优先解析页面展示时间，结构化字段只作兜底。
+
+    大麦偶尔会返回与展示名称不一致的 performBeginDTStr，例如名称为
+    ``2026-08-13 周四 14:30``，字段却是 ``202608131400``。
+    """
+    label = str(name or "").strip()
+    full = re.search(
+        r"(\d{4})[-./年](\d{1,2})[-./月](\d{1,2})日?.*?(\d{1,2}):(\d{2})",
+        label,
+    )
+    if full:
+        year, month, day, hour, minute = (int(x) for x in full.groups())
+        return f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}"
+
     s = str(begin or "").strip()
+    label_time = re.search(r"(\d{1,2}):(\d{2})", label)
+    if len(s) >= 8 and s[:8].isdigit() and label_time:
+        hour, minute = (int(x) for x in label_time.groups())
+        return f"{s[0:4]}-{s[4:6]}-{s[6:8]} {hour:02d}:{minute:02d}"
     if len(s) >= 12 and s.isdigit():
         return f"{s[0:4]}-{s[4:6]}-{s[6:8]} {s[8:10]}:{s[10:12]}"
-    if name and str(name).strip():
-        return str(name).strip()
+    if label:
+        return label
     return s
 
 
@@ -525,6 +573,153 @@ def parse_description_sections(text: str) -> dict[str, Any]:
     }
 
 
+def extract_detail_from_mobile(
+    payload: dict[str, Any],
+    *,
+    expected_item_id: str,
+) -> dict[str, Any]:
+    """从移动端 MTop ``itemDetail`` 结果抽取场次和静态详情。
+
+    这个响应包含 PC ``subpage`` 缺失项目的基础资料、完整场次列表和项目
+    介绍，但不包含逐场票档。因此移动兜底以全局价格区间入库，并明确
+    记录票档来源，避免把区间价格伪造成每场票档。
+    """
+    component_map = payload.get("detailViewComponentMap")
+    item_root = component_map.get("item") if isinstance(component_map, dict) else None
+    if not isinstance(item_root, dict):
+        return {}
+
+    static = item_root.get("staticData")
+    static = static if isinstance(static, dict) else {}
+    item_base = static.get("itemBase")
+    item_base = item_base if isinstance(item_base, dict) else {}
+    actual_item_id = str(item_base.get("itemId") or "")
+    if actual_item_id != str(expected_item_id):
+        return {}
+
+    venue = static.get("venue")
+    venue = venue if isinstance(venue, dict) else {}
+    dynamic = item_root.get("dynamicExtData")
+    dynamic = dynamic if isinstance(dynamic, dict) else {}
+    item_data = item_root.get("item")
+    item_data = item_data if isinstance(item_data, dict) else {}
+
+    sessions: list[dict[str, Any]] = []
+    for perform_base in item_data.get("performBases") or []:
+        if not isinstance(perform_base, dict):
+            continue
+        for perform in perform_base.get("performs") or []:
+            if not isinstance(perform, dict):
+                continue
+            perform_id = str(perform.get("performId") or "")
+            if not perform_id:
+                continue
+            perform_name = clean_text(
+                str(perform.get("performName") or perform.get("performTime") or "")
+            )
+            start_date = str(perform.get("performStartDate") or "")
+            begin_time = str(perform.get("performBeginTime") or "")
+            structured = re.sub(r"\D", "", f"{start_date}{begin_time}")
+            start_time = _perform_begin_to_raw(structured, perform_name)
+            date_key = re.sub(r"\D", "", start_date)
+            sessions.append(
+                {
+                    "id": perform_id,
+                    "session_id": perform_id,
+                    "name": perform_name,
+                    "start_time": start_time,
+                    "time": start_time,
+                    "showTime": start_time,
+                    "status": "onsale",
+                    "date_key": date_key,
+                    "tags": [],
+                    "ticket_tiers": [],
+                }
+            )
+    sessions.sort(key=lambda value: str(value.get("start_time") or ""))
+
+    extend_info = static.get("itemExtendInfo")
+    extend_info = extend_info if isinstance(extend_info, dict) else {}
+    description = _html_to_text(str(extend_info.get("itemExtend") or ""))
+    parsed_description = parse_description_sections(description)
+
+    performers = [
+        clean_text(str(artist.get("artistName") or artist.get("name") or ""))
+        for artist in (dynamic.get("artists") or [])
+        if isinstance(artist, dict)
+    ]
+    performers = [name for name in performers if name]
+    for name in parsed_description.get("performers") or []:
+        cleaned = clean_text(str(name))
+        if cleaned and cleaned not in performers:
+            performers.append(cleaned)
+
+    organizers = list(parsed_description.get("organizers") or [])
+    for note in item_base.get("serviceNotes") or []:
+        if not isinstance(note, dict):
+            continue
+        note_text = _html_to_text(
+            str(note.get("tagDesc") or note.get("tagDescWithStyle") or "")
+        )
+        match = re.search(r"发票开具方[：:]\s*([^\n<]+)", note_text)
+        if not match:
+            continue
+        organizer = clean_text(match.group(1))
+        if organizer and organizer not in organizers:
+            organizers.append(organizer)
+        break
+
+    venue_address = clean_text(str(venue.get("venueAddr") or ""))
+    date_ids = sorted(
+        {str(session.get("date_key") or "") for session in sessions if session.get("date_key")}
+    )
+
+    def as_float(value: Any) -> float | None:
+        try:
+            return float(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "title": clean_text(str(item_base.get("itemName") or "")),
+        "city": clean_text(
+            str(
+                venue.get("venueCityName")
+                or item_base.get("cityName")
+                or venue.get("venueProvinceName")
+                or ""
+            )
+        ),
+        "venue_name": clean_text(str(venue.get("venueName") or "")),
+        "venue_address": venue_address,
+        "district": _district_from_address(venue_address),
+        "lat": as_float(venue.get("lat")),
+        "lng": as_float(venue.get("lng")),
+        "venue_id": venue.get("venueId"),
+        "price_range": clean_text(str(item_data.get("priceRange") or "")),
+        "date_ids": date_ids,
+        "sessions": sessions,
+        "calendar_date_count": len(date_ids),
+        "calendar_dates_fetched": len(date_ids),
+        "calendar_dates_failed": [],
+        "ticket_sessions_requested": 0,
+        "ticket_sessions_fetched": 0,
+        "ticket_sessions_failed": [],
+        "ticket_tier_source": "mobile_price_range",
+        "description": description[:8000],
+        "troupe": parsed_description.get("troupe") or "",
+        "organizers": organizers,
+        "performers": performers,
+        "conductor": parsed_description.get("conductor") or "",
+        "program": parsed_description.get("program") or "",
+        "price_text": parsed_description.get("price_text") or "",
+        "place_text": parsed_description.get("place_text") or "",
+        "detail_source": "damai_mobile_mtop",
+        "detail_url": mobile_detail_url(expected_item_id),
+        "detail_complete": bool(sessions),
+    }
+
+
 def parse_price_text_to_ladder(price_text: str) -> str:
     """把「80 / 180 / 280 / VIP 680」→ `80|180|280|680`。"""
     if not price_text:
@@ -588,7 +783,9 @@ def apply_detail_to_raw(item: RawShowItem, detail: dict[str, Any]) -> RawShowIte
         else:
             pr = detail.get("price_range") or ""
             if pr:
-                item.price_raw = pr.replace("￥", "").replace(" ", "")
+                item.price_raw = (
+                    str(pr).replace("￥", "").replace("¥", "").replace(" ", "")
+                )
 
     # 主时间
     if sessions and not item.start_time_raw:
@@ -625,6 +822,16 @@ def apply_detail_to_raw(item: RawShowItem, detail: dict[str, Any]) -> RawShowIte
         "lng": detail.get("lng"),
         "price_range": detail.get("price_range"),
         "session_count": len(sessions),
+        "detail_complete": bool(detail.get("detail_complete", sessions)),
+        "calendar_date_count": int(detail.get("calendar_date_count") or 0),
+        "calendar_dates_fetched": int(detail.get("calendar_dates_fetched") or 0),
+        "calendar_dates_failed": detail.get("calendar_dates_failed") or [],
+        "ticket_sessions_requested": int(detail.get("ticket_sessions_requested") or 0),
+        "ticket_sessions_fetched": int(detail.get("ticket_sessions_fetched") or 0),
+        "ticket_sessions_failed": detail.get("ticket_sessions_failed") or [],
+        "ticket_tier_source": detail.get("ticket_tier_source") or "pc_subpage",
+        "detail_source": detail.get("detail_source") or "damai_pc_subpage",
+        "detail_url": detail.get("detail_url") or item.url,
         "troupe": troupe,
         "organizer": "、".join(organizers),
         "organizers": organizers,
@@ -653,11 +860,14 @@ async def fetch_subpage(
 ) -> dict[str, Any] | None:
     """用 Playwright request（带 cookie、无 CORS）拉 subpage 并解析 JSONP。
 
-    不用 page.evaluate(fetch)：从 search.damai.cn 调 detail.damai.cn 会被浏览器 CORS 拦截。
+    不用 page.evaluate(fetch)：页面导航或风控跳转不能中断独立 HTTP 请求。
     """
     url = _build_subpage_url(item_id, data_id=data_id, data_type=data_type)
     text = ""
+    status = 0
+    content_type = ""
     ua = await _browser_ua(page)
+    resp = None
     try:
         # context.request 继承 storage_state cookies
         req = page.context.request
@@ -671,6 +881,9 @@ async def fetch_subpage(
                 "user-agent": ua,
             },
         )
+        status = int(resp.status)
+        headers = getattr(resp, "headers", {}) or {}
+        content_type = str(headers.get("content-type") or "")
         if not resp.ok:
             logger.warning(
                 "subpage http %s item=%s dataId=%s", resp.status, item_id, data_id or "-"
@@ -678,40 +891,34 @@ async def fetch_subpage(
             return None
         text = await resp.text()
     except Exception as exc:  # noqa: BLE001
-        # 回退：页内 fetch（若当前已在 detail 域）
-        logger.debug("subpage request failed, try page fetch: %s", exc)
-        try:
-            text = await asyncio.wait_for(
-                page.evaluate(
-                    """async ({ url, timeoutMs }) => {
-                      const ctrl = new AbortController();
-                      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-                      try {
-                        const r = await fetch(url, {
-                          credentials: 'include',
-                          signal: ctrl.signal,
-                          headers: { accept: '*/*' },
-                        });
-                        return await r.text();
-                      } catch (e) {
-                        return '';
-                      } finally {
-                        clearTimeout(timer);
-                      }
-                    }""",
-                    {"url": url, "timeoutMs": int(timeout_ms)},
-                ),
-                timeout=max(5.0, timeout_ms / 1000.0 + 3.0),
-            )
-        except Exception as exc2:  # noqa: BLE001
-            logger.warning("subpage fetch failed item=%s: %s", item_id, exc2)
-            return None
+        logger.warning("subpage request failed item=%s: %s", item_id, exc)
+        return None
+    finally:
+        if resp is not None:
+            try:
+                await resp.dispose()
+            except Exception:  # noqa: BLE001
+                pass
 
-    if not text:
+    if not text.strip():
+        logger.warning(
+            "subpage empty response item=%s status=%s content_type=%s",
+            item_id,
+            status,
+            content_type or "-",
+        )
         return None
     data = parse_jsonp(text)
     if not data:
-        logger.warning("subpage parse failed item=%s head=%s", item_id, text[:80])
+        logger.warning(
+            "subpage invalid response item=%s status=%s content_type=%s chars=%s "
+            "head=%r",
+            item_id,
+            status,
+            content_type or "-",
+            len(text),
+            text[:160],
+        )
         return None
     resp_info = data.get("responseInfo") if isinstance(data.get("responseInfo"), dict) else {}
     if resp_info and str(resp_info.get("responseSuccess", "true")).lower() == "false":
@@ -720,6 +927,69 @@ async def fetch_subpage(
         )
         return None
     return data
+
+
+async def _fetch_subpage_with_retry(
+    page: Page,
+    item_id: str,
+    *,
+    data_id: str = "",
+    data_type: str = "",
+    attempts: int = 3,
+    retry_delay_s: float = 2.0,
+    max_retry_delay_s: float = 2.0,
+    pacer: _SubpageRequestPacer | None = None,
+    validator: Callable[[dict[str, Any]], bool] | None = None,
+    request_label: str = "base",
+) -> dict[str, Any] | None:
+    """按全局节拍请求；失败时固定间隔重试并验证业务语义。"""
+    # 保留参数是为了兼容旧配置/调用方；重试策略现在固定间隔，不再递增。
+    _ = max_retry_delay_s
+    total = max(1, attempts)
+    for attempt in range(1, total + 1):
+        if pacer is not None:
+            await pacer.wait_turn()
+        data = await fetch_subpage(
+            page,
+            item_id,
+            data_id=data_id,
+            data_type=data_type,
+        )
+        valid = bool(data) and (validator(data) if validator is not None else True)
+        if valid:
+            return data
+        if data and validator is not None:
+            logger.warning(
+                "subpage semantic mismatch item=%s label=%s dataType=%s dataId=%s "
+                "attempt=%s/%s",
+                item_id,
+                request_label,
+                data_type or "-",
+                data_id or "-",
+                attempt,
+                total,
+            )
+        if attempt < total:
+            retry_in = max(0.0, retry_delay_s)
+            logger.warning(
+                "subpage retry scheduled item=%s label=%s attempt=%s/%s retry_in=%.1fs",
+                item_id,
+                request_label,
+                attempt + 1,
+                total,
+                retry_in,
+            )
+            if retry_in > 0:
+                await asyncio.sleep(retry_in)
+    logger.warning(
+        "subpage retries exhausted item=%s label=%s dataType=%s dataId=%s attempts=%s",
+        item_id,
+        request_label,
+        data_type or "-",
+        data_id or "-",
+        total,
+    )
+    return None
 
 
 async def fetch_item_static(
@@ -731,6 +1001,7 @@ async def fetch_item_static(
     """GET item.htm，解析 staticDataDefault（场馆地址 + 项目介绍）。"""
     url = f"{ITEM_PAGE}?id={item_id}"
     ua = await _browser_ua(page)
+    resp = None
     try:
         resp = await page.context.request.get(
             url,
@@ -748,6 +1019,12 @@ async def fetch_item_static(
     except Exception as exc:  # noqa: BLE001
         logger.warning("item.htm fetch failed item=%s: %s", item_id, exc)
         return {}
+    finally:
+        if resp is not None:
+            try:
+                await resp.dispose()
+            except Exception:  # noqa: BLE001
+                pass
     return parse_item_static_html(html)
 
 
@@ -756,54 +1033,189 @@ async def enrich_item_detail(
     item: RawShowItem,
     *,
     fetch_all_dates: bool = True,
-    date_limit: int = 40,
+    date_limit: int = 0,
     delay_s: float = 0.25,
+    pacer: _SubpageRequestPacer | None = None,
+    request_attempts: int = 3,
+    retry_delay_s: float = 2.0,
+    max_retry_delay_s: float = 2.0,
 ) -> RawShowItem:
-    """拉取详情并写回 item。失败时原样返回。"""
+    """拉取完整详情并写回 item；可靠性重试耗尽时抛错，禁止降级入库。"""
     item_id = (item.source_id or "").strip()
     if not item_id or not item_id.isdigit():
         # 尝试从 url 抠 id
         m = re.search(r"[?&]id=(\d+)", item.url or "")
         item_id = m.group(1) if m else ""
     if not item_id:
-        return item
+        raise DetailCompletenessError(
+            f"大麦详情缺少可用项目 ID source_id={item.source_id!r} url={item.url!r}"
+        )
+
+    async def fetch_reliable(
+        *,
+        data_id: str = "",
+        data_type: str = "",
+        validator: Callable[[dict[str, Any]], bool] | None = None,
+        label: str,
+    ) -> dict[str, Any] | None:
+        return await _fetch_subpage_with_retry(
+            page,
+            item_id,
+            data_id=data_id,
+            data_type=data_type,
+            attempts=request_attempts,
+            retry_delay_s=retry_delay_s,
+            max_retry_delay_s=max_retry_delay_s,
+            pacer=pacer,
+            validator=validator,
+            request_label=label,
+        )
 
     # 1) subpage：场次 + 票档
     detail: dict[str, Any] = {}
-    base = await fetch_subpage(page, item_id)
+
+    def is_expected_base(payload: dict[str, Any]) -> bool:
+        basic = payload.get("itemBasicInfo")
+        if not isinstance(basic, dict):
+            return False
+        return str(basic.get("itemId") or "") == item_id
+
+    base = await fetch_reliable(validator=is_expected_base, label="base")
     if base:
         detail = extract_detail_from_subpage(base)
         all_sessions = list(detail.get("sessions") or [])
+        ticket_details_fetched: set[str] = set()
+
+        def record_explicit_ticket_response(payload: dict[str, Any]) -> None:
+            perform = payload.get("perform")
+            if not isinstance(perform, dict) or not isinstance(
+                perform.get("skuList"), list
+            ):
+                return
+            perform_id = str(perform.get("performId") or perform.get("id") or "")
+            if perform_id:
+                ticket_details_fetched.add(perform_id)
+
+        record_explicit_ticket_response(base)
 
         date_ids = list(detail.get("date_ids") or [])
+        limited_date_ids = date_ids if date_limit <= 0 else date_ids[:date_limit]
+        fetched_dates: set[str] = set()
+        failed_dates: list[str] = []
         if fetch_all_dates and date_ids:
             seen_dates = {
                 str(s.get("date_key") or "") for s in all_sessions if s.get("date_key")
             }
-            for date_id in date_ids[: max(1, date_limit)]:
+            fetched_dates.update(d for d in limited_date_ids if d in seen_dates)
+            for date_id in limited_date_ids:
                 if date_id in seen_dates:
                     continue
-                if delay_s > 0:
-                    await asyncio.sleep(delay_s)
-                day = await fetch_subpage(page, item_id, data_id=date_id, data_type="4")
+                day = await fetch_reliable(
+                    data_id=date_id,
+                    data_type="4",
+                    validator=lambda payload, expected=date_id: any(
+                        str(session.get("date_key") or "") == expected
+                        for session in (
+                            extract_detail_from_subpage(payload).get("sessions") or []
+                        )
+                    ),
+                    label=f"calendar:{date_id}",
+                )
                 if not day:
-                    continue
+                    raise DetailCompletenessError(
+                        f"大麦详情日期场次重试耗尽 item={item_id} date={date_id}"
+                    )
                 day_detail = extract_detail_from_subpage(day)
-                all_sessions = merge_sessions(all_sessions, day_detail.get("sessions") or [])
+                day_sessions = day_detail.get("sessions") or []
+                all_sessions = merge_sessions(all_sessions, day_sessions)
+                record_explicit_ticket_response(day)
                 seen_dates.add(date_id)
+                fetched_dates.add(date_id)
 
-        by_date: dict[str, list[dict[str, Any]]] = {}
-        for s in all_sessions:
-            by_date.setdefault(str(s.get("date_key") or ""), []).append(s)
-        for _dk, group in by_date.items():
-            donor = next((x for x in group if x.get("ticket_tiers")), None)
-            if not donor:
+        # dataType=4 只返回所选日期的默认场次票档。同日其它场次必须再按
+        # performId + dataType=2 切换，不能复制默认场次票档。
+        ticket_sessions_requested = 0
+        ticket_sessions_fetched = 0
+        failed_perform_ids: list[str] = []
+        for session in all_sessions:
+            perform_id = str(session.get("id") or session.get("session_id") or "")
+            if not perform_id:
+                raise DetailCompletenessError(
+                    f"大麦详情场次缺少 performId item={item_id}"
+                )
+            if perform_id in ticket_details_fetched:
                 continue
-            for s in group:
-                if not s.get("ticket_tiers"):
-                    s["ticket_tiers"] = list(donor.get("ticket_tiers") or [])
+            ticket_sessions_requested += 1
+
+            def has_requested_tiers(
+                payload: dict[str, Any], expected: str = perform_id
+            ) -> bool:
+                perform = payload.get("perform")
+                if not isinstance(perform, dict):
+                    return False
+                response_perform_id = str(
+                    perform.get("performId") or perform.get("id") or ""
+                )
+                sku_list = perform.get("skuList")
+                # 空票档可能是业务上的合法结果；关键是响应明确属于
+                # 目标场次，且确实返回了 skuList 字段。
+                return response_perform_id == expected and isinstance(sku_list, list)
+
+            perform_data = await fetch_reliable(
+                data_id=perform_id,
+                data_type="2",
+                validator=has_requested_tiers,
+                label=f"perform:{perform_id}",
+            )
+            if not perform_data:
+                raise DetailCompletenessError(
+                    f"大麦详情票档重试耗尽 item={item_id} perform={perform_id}"
+                )
+            perform_detail = extract_detail_from_subpage(perform_data)
+            current_session = next(
+                (
+                    fetched
+                    for fetched in (perform_detail.get("sessions") or [])
+                    if str(fetched.get("id") or fetched.get("session_id") or "")
+                    == perform_id
+                ),
+                None,
+            )
+            if not current_session:
+                raise DetailCompletenessError(
+                    f"大麦详情票档响应缺少目标场次 item={item_id} "
+                    f"perform={perform_id}"
+                )
+            all_sessions = merge_sessions(all_sessions, perform_detail.get("sessions") or [])
+            record_explicit_ticket_response(perform_data)
+            ticket_sessions_fetched += 1
 
         detail["sessions"] = all_sessions
+        detail["calendar_date_count"] = len(date_ids)
+        detail["calendar_dates_fetched"] = len(fetched_dates)
+        detail["calendar_dates_failed"] = failed_dates
+        detail["ticket_sessions_requested"] = ticket_sessions_requested
+        detail["ticket_sessions_fetched"] = ticket_sessions_fetched
+        detail["ticket_sessions_failed"] = failed_perform_ids
+        dates_complete = not date_ids or (
+            fetch_all_dates
+            and len(date_ids) <= len(limited_date_ids)
+            and len(fetched_dates) == len(date_ids)
+            and not failed_dates
+        )
+        detail["detail_complete"] = (
+            dates_complete and not failed_dates and not failed_perform_ids
+        )
+    else:
+        raise DetailCompletenessError(
+            f"大麦详情基础响应重试耗尽 item={item_id} attempts={request_attempts}"
+        )
+
+    if not detail.get("detail_complete"):
+        raise DetailCompletenessError(
+            f"大麦详情不完整 item={item_id} "
+            f"dates={len(limited_date_ids)}/{len(date_ids)}"
+        )
 
     # 2) item.htm staticData：真实地址 + 主办/团体/艺术家介绍
     if delay_s > 0:
@@ -833,11 +1245,114 @@ async def enrich_item_detail(
         return item
 
     logger.info(
-        "damai detail item=%s venue=%s addr=%s sessions=%s troupe=%s organizers=%s",
+        "damai detail item=%s venue=%s addr=%s sessions=%s complete=%s "
+        "dates=%s/%s ticket_sessions=%s/%s troupe=%s organizers=%s",
         item_id,
         detail.get("venue_name"),
         (detail.get("venue_address") or "")[:40],
         len(detail.get("sessions") or []),
+        bool(detail.get("detail_complete")),
+        int(detail.get("calendar_dates_fetched") or 0),
+        int(detail.get("calendar_date_count") or 0),
+        int(detail.get("ticket_sessions_fetched") or 0),
+        int(detail.get("ticket_sessions_requested") or 0),
+        detail.get("troupe") or "",
+        detail.get("organizers") or [],
+    )
+    return apply_detail_to_raw(item, detail)
+
+
+async def _fetch_mobile_detail_with_retry(
+    item_id: str,
+    *,
+    attempts: int = 3,
+    retry_delay_s: float = 2.0,
+) -> dict[str, Any] | None:
+    """固定 2 秒间隔重试移动端详情；失败由批处理跳过当前项目。"""
+    total = max(1, int(attempts))
+    last_error: Exception | None = None
+    for attempt in range(1, total + 1):
+        try:
+            return await fetch_mobile_item_detail(item_id)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            logger.warning(
+                "damai mobile detail failed item=%s attempt=%s/%s reason=%s",
+                item_id,
+                attempt,
+                total,
+                exc,
+            )
+        if attempt < total:
+            retry_in = max(0.0, float(retry_delay_s))
+            logger.warning(
+                "damai mobile detail retry item=%s attempt=%s/%s retry_in=%.1fs",
+                item_id,
+                attempt + 1,
+                total,
+                retry_in,
+            )
+            if retry_in > 0:
+                await asyncio.sleep(retry_in)
+    logger.warning(
+        "damai mobile detail exhausted item=%s attempts=%s reason=%s",
+        item_id,
+        total,
+        last_error,
+    )
+    return None
+
+
+async def enrich_item_mobile_detail(
+    item: RawShowItem,
+    *,
+    request_attempts: int = 3,
+    retry_delay_s: float = 2.0,
+) -> RawShowItem:
+    """用官方大麦移动端 MTop 补全 PC 详情不可用的项目。"""
+    item_id = str(item.source_id or "").strip()
+    if not item_id.isdigit():
+        match = re.search(r"[?&](?:id|itemId)=(\d+)", item.url or "")
+        item_id = match.group(1) if match else ""
+    if not item_id:
+        raise DetailCompletenessError("大麦移动端详情缺少可用项目编号")
+
+    payload = await _fetch_mobile_detail_with_retry(
+        item_id,
+        attempts=request_attempts,
+        retry_delay_s=retry_delay_s,
+    )
+    if not payload:
+        raise DetailCompletenessError(
+            f"大麦移动端详情重试耗尽 item={item_id} attempts={request_attempts}"
+        )
+    detail = extract_detail_from_mobile(payload, expected_item_id=item_id)
+    if not detail.get("detail_complete"):
+        raise DetailCompletenessError(
+            f"大麦移动端详情缺少场次 item={item_id}"
+        )
+
+    # 使用真正可访问的官方移动详情链接，避免保留会返回业务 404 的
+    # PC 链接。
+    item.url = mobile_detail_url(item_id)
+    logger.info(
+        "damai mobile detail success item=%s url=%s sessions=%s",
+        item_id,
+        item.url,
+        len(detail.get("sessions") or []),
+    )
+    logger.info(
+        "damai detail item=%s venue=%s addr=%s sessions=%s complete=%s "
+        "dates=%s/%s ticket_sessions=%s/%s troupe=%s organizers=%s",
+        item_id,
+        detail.get("venue_name"),
+        (detail.get("venue_address") or "")[:40],
+        len(detail.get("sessions") or []),
+        bool(detail.get("detail_complete")),
+        int(detail.get("calendar_dates_fetched") or 0),
+        int(detail.get("calendar_date_count") or 0),
+        int(detail.get("ticket_sessions_fetched") or 0),
+        int(detail.get("ticket_sessions_requested") or 0),
         detail.get("troupe") or "",
         detail.get("organizers") or [],
     )
@@ -848,26 +1363,60 @@ async def enrich_items_detail(
     page: Page,
     items: list[RawShowItem],
     *,
-    delay_s: float = 0.35,
+    delay_s: float = 1.5,
     fetch_all_dates: bool = True,
-    date_limit: int = 40,
+    date_limit: int = 0,
+    request_attempts: int = 3,
+    retry_delay_s: float = 2.0,
+    max_retry_delay_s: float = 2.0,
+    project_attempts: int = 1,
+    project_cooldown_s: float = 0.0,
     on_item: Callable[[RawShowItem], Awaitable[None] | None] | None = None,
 ) -> list[RawShowItem]:
-    """批量补全详情；逐条串行，并在每条完成后立即交给编排层。"""
+    """批量补全详情；PC 失败走移动端，仍失败则跳过并继续下一个。"""
+    # 兼容旧调用签名；整项目冷却重跑已取消，避免一个项目阻塞
+    # 整批任务。
+    _ = (project_attempts, project_cooldown_s)
     out: list[RawShowItem] = []
     total = len(items)
+    skipped = 0
+    pacer = _SubpageRequestPacer(delay_s)
     for idx, item in enumerate(items, 1):
+        logger.info("damai detail processing %s/%s id=%s", idx, total, item.source_id)
         try:
             enriched = await enrich_item_detail(
                 page,
                 item,
                 fetch_all_dates=fetch_all_dates,
                 date_limit=date_limit,
-                delay_s=min(delay_s, 0.2),
+                delay_s=delay_s,
+                pacer=pacer,
+                request_attempts=request_attempts,
+                retry_delay_s=retry_delay_s,
+                max_retry_delay_s=max_retry_delay_s,
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("damai detail enrich error id=%s: %s", item.source_id, exc)
-            enriched = item
+        except Exception as pc_error:  # noqa: BLE001
+            logger.warning(
+                "damai mobile detail fallback item=%s url=%s reason=%s",
+                item.source_id,
+                mobile_detail_url(str(item.source_id or "")),
+                pc_error,
+            )
+            try:
+                enriched = await enrich_item_mobile_detail(
+                    item,
+                    request_attempts=request_attempts,
+                    retry_delay_s=retry_delay_s,
+                )
+            except Exception as mobile_error:  # noqa: BLE001
+                skipped += 1
+                logger.warning(
+                    "damai detail skipped item=%s reason=%s",
+                    item.source_id,
+                    mobile_error,
+                )
+                logger.info("damai detail progress %s/%s id=%s", idx, total, item.source_id)
+                continue
         out.append(enriched)
         if on_item is not None:
             callback_result = on_item(enriched)
@@ -877,4 +1426,10 @@ async def enrich_items_detail(
             logger.info("damai detail progress %s/%s id=%s", idx, total, item.source_id)
         if delay_s > 0 and idx < total:
             await asyncio.sleep(delay_s)
+    logger.info(
+        "damai detail batch done success=%s skipped=%s total=%s",
+        len(out),
+        skipped,
+        total,
+    )
     return out

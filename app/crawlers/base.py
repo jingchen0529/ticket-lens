@@ -45,6 +45,7 @@ class BaseCrawler(abc.ABC):
         cities: Sequence[str],
         keywords: Sequence[str],
         max_pages: int,
+        category: str = "",
         on_item: ItemCallback | None = None,
     ) -> list[RawShowItem]:
         """执行采集，返回平台原始条目。"""

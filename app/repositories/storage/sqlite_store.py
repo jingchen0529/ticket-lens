@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from app.core.cities import seed_cities_table
 from app.models import CrawlResult, RawShowItem, Show
 from app.pipeline.normalize import split_show_by_sessions
 from app.repositories.storage.base import Storage
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS shows (
@@ -75,6 +78,43 @@ class SqliteStorage(Storage):
     def root(self) -> Path:
         return self._root
 
+    @staticmethod
+    def _raw_session_quality(payload: str | bytes | dict) -> tuple[int, bool, int]:
+        try:
+            data = orjson.loads(payload) if not isinstance(payload, dict) else payload
+        except (orjson.JSONDecodeError, TypeError):
+            return (0, False, 0)
+        sessions = data.get("sessions_raw") if isinstance(data, dict) else []
+        sessions = sessions if isinstance(sessions, list) else []
+        tier_count = 0
+        for session in sessions:
+            tiers = session.get("ticket_tiers") if isinstance(session, dict) else []
+            tier_count += len(tiers) if isinstance(tiers, list) else 0
+        detail = (data.get("raw_payload") or {}).get("detail") if isinstance(data, dict) else {}
+        detail = detail if isinstance(detail, dict) else {}
+        complete = bool(detail.get("detail_complete", bool(sessions)))
+        return (len(sessions), complete, tier_count)
+
+    @staticmethod
+    def _show_payload_quality(payloads: list[str]) -> tuple[int, bool, bool, int]:
+        enriched = False
+        complete = False
+        tier_count = 0
+        for payload in payloads:
+            try:
+                data = orjson.loads(payload)
+            except (orjson.JSONDecodeError, TypeError):
+                continue
+            extras = data.get("extras") if isinstance(data, dict) else {}
+            extras = extras if isinstance(extras, dict) else {}
+            enriched = enriched or bool(extras.get("detail_enriched"))
+            complete = complete or bool(extras.get("detail_complete"))
+            sessions = data.get("sessions") if isinstance(data, dict) else []
+            for session in sessions if isinstance(sessions, list) else []:
+                tiers = session.get("ticket_tiers") if isinstance(session, dict) else []
+                tier_count += len(tiers) if isinstance(tiers, list) else 0
+        return (len(payloads), enriched, complete, tier_count)
+
     def save_raw(self, items: list[RawShowItem]) -> Path:
         # 同一批内也先去重。旧实现只先 DELETE 再批量 INSERT；若批次本身含
         # 4 个相同项目，仍会一次插入 4 行。
@@ -88,6 +128,57 @@ class SqliteStorage(Storage):
                 seen.add(key)
             unique_reversed.append(item)
         unique_items = list(reversed(unique_reversed))
+        existing_raw: dict[tuple[str, str], str] = {}
+        for item in unique_items:
+            if not item.source_id:
+                continue
+            row = self._conn.execute(
+                "SELECT payload FROM raw_items WHERE source = ? AND source_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (item.source.value, item.source_id),
+            ).fetchone()
+            if row:
+                existing_raw[(item.source.value, item.source_id)] = str(row[0])
+
+        protected_items: list[RawShowItem] = []
+        for item in unique_items:
+            key = (item.source.value, item.source_id)
+            old_payload = existing_raw.get(key)
+            if old_payload:
+                old_count, _old_complete, old_tiers = self._raw_session_quality(old_payload)
+                new_payload = item.model_dump(mode="json")
+                new_count, new_complete, new_tiers = self._raw_session_quality(new_payload)
+                if old_count > 0 and new_count == 0:
+                    logger.warning(
+                        "keep existing raw detail source=%s source_id=%s old_sessions=%s "
+                        "new_sessions=0",
+                        item.source.value,
+                        item.source_id,
+                        old_count,
+                    )
+                    continue
+                if old_count > new_count and not new_complete:
+                    logger.warning(
+                        "keep existing raw detail source=%s source_id=%s old_sessions=%s "
+                        "new_sessions=%s new_complete=false",
+                        item.source.value,
+                        item.source_id,
+                        old_count,
+                        new_count,
+                    )
+                    continue
+                if old_tiers > new_tiers and not new_complete:
+                    logger.warning(
+                        "keep existing raw detail source=%s source_id=%s old_tiers=%s "
+                        "new_tiers=%s new_complete=false",
+                        item.source.value,
+                        item.source_id,
+                        old_tiers,
+                        new_tiers,
+                    )
+                    continue
+            protected_items.append(item)
+        unique_items = protected_items
         rows = [
             (
                 i.source.value,
@@ -132,6 +223,46 @@ class SqliteStorage(Storage):
             else:
                 split_shows.append(show)
         shows = split_shows
+        incoming_by_key: dict[tuple[str, str], list[Show]] = {}
+        for show in shows:
+            if show.source_id:
+                incoming_by_key.setdefault((show.source.value, show.source_id), []).append(show)
+
+        protected_keys: set[tuple[str, str]] = set()
+        for key, incoming in incoming_by_key.items():
+            existing_rows = self._conn.execute(
+                "SELECT payload FROM shows WHERE source = ? AND source_id = ?",
+                key,
+            ).fetchall()
+            if not existing_rows:
+                continue
+            old_quality = self._show_payload_quality([str(row[0]) for row in existing_rows])
+            new_quality = self._show_payload_quality(
+                [orjson.dumps(show.model_dump(mode="json")).decode() for show in incoming]
+            )
+            old_count, old_enriched, old_complete, old_tiers = old_quality
+            new_count, new_enriched, new_complete, new_tiers = new_quality
+            if old_enriched and not new_enriched:
+                protected_keys.add(key)
+            elif old_count > new_count and not new_complete:
+                protected_keys.add(key)
+            elif old_tiers > new_tiers and not new_complete:
+                protected_keys.add(key)
+
+        for source, source_id in protected_keys:
+            logger.warning(
+                "keep existing show detail source=%s source_id=%s because incoming detail "
+                "is missing or incomplete",
+                source,
+                source_id,
+            )
+
+        if protected_keys:
+            shows = [
+                show
+                for show in shows
+                if (show.source.value, show.source_id) not in protected_keys
+            ]
         rows = []
         for s in shows:
             rows.append(

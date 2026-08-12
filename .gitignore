@@ -66,3 +66,10 @@ pw-browsers/
 
 # --- WorkBuddy 助手工作目录（本地记忆/技能，不入库）---
 .workbuddy/
+
+/artifacts/
+/js_reverse_cache/
+
+移动端.md
+BUILD.md
+CHANGELOG.md

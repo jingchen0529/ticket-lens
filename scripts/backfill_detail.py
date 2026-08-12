@@ -100,9 +100,17 @@ async def backfill_detail():
             enriched = await enrich_items_detail(
                 page,
                 raw_items,
-                delay_s=float(config.crawl.detail_delay_seconds or 0.35),
+                delay_s=float(config.crawl.detail_delay_seconds or 1.5),
                 fetch_all_dates=True,
-                date_limit=int(config.crawl.detail_date_limit or 40),
+                date_limit=int(config.crawl.detail_date_limit),
+                request_attempts=int(config.crawl.detail_retry_attempts),
+                max_retry_delay_s=float(
+                    config.crawl.detail_retry_max_backoff_seconds
+                ),
+                project_attempts=int(config.crawl.detail_project_attempts),
+                project_cooldown_s=float(
+                    config.crawl.detail_project_cooldown_seconds
+                ),
             )
 
     # 4. 规范化并入库

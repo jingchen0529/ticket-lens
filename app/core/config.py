@@ -76,10 +76,18 @@ class CrawlConfig(BaseModel):
     scroll_pause_ms: int = 800
     # 列表后是否补全详情（场次/票档/场馆）
     enrich_detail: bool = True
-    # 每条详情请求间隔（秒），略大更稳
-    detail_delay_seconds: float = 0.35
-    # 每个项目最多按日历拉多少个日期（防止极端长档期）
-    detail_date_limit: int = 40
+    # subpage 全局最小请求间隔；带 0～25% 抖动，避免长档期形成突发流量。
+    detail_delay_seconds: float = Field(default=1.5, ge=0.0, le=30.0)
+    # 每个项目最多按日历拉多少个日期；0 = 不截断，保证详情完整。
+    detail_date_limit: int = Field(default=0, ge=0, le=366)
+    # 单个详情子请求最多 3 次，失败间隔固定 2 秒。
+    detail_retry_attempts: int = Field(default=3, ge=1, le=10)
+    detail_retry_delay_seconds: float = Field(default=2.0, ge=0.0, le=30.0)
+    # 旧字段保留用于配置兼容；固定间隔策略不再使用退避上限。
+    detail_retry_max_backoff_seconds: float = Field(default=2.0, ge=0.0, le=300.0)
+    # 旧字段保留用于配置兼容；整项目重试已取消，失败后继续下一个项目。
+    detail_project_attempts: int = Field(default=1, ge=1, le=5)
+    detail_project_cooldown_seconds: float = Field(default=0.0, ge=0.0, le=600.0)
 
 
 class SourceEndpointConfig(BaseModel):

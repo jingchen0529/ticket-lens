@@ -98,6 +98,25 @@ def test_normalize_date_range_does_not_raise():
     assert "2026-01-01" in (payload.get("start_time") or "")
 
 
+def test_date_range_is_not_counted_as_a_concrete_session():
+    raw = RawShowItem(
+        source=SourcePlatform.DAMAI,
+        source_id="range-summary",
+        title="长档期演出",
+        city="北京",
+        start_time_raw="2026.08.07-08.23",
+    )
+
+    aggregate = normalize_one(raw)
+    assert aggregate is not None
+    assert aggregate.sessions == []
+
+    split = normalize_items([raw])
+    assert len(split) == 1
+    assert split[0].start_time is None
+    assert split[0].sessions == []
+
+
 def test_normalize_damai_raw():
     raw = RawShowItem(
         source=SourcePlatform.DAMAI,

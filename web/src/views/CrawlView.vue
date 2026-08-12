@@ -1,10 +1,15 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted, defineExpose } from 'vue'
-import { api } from '../api'
+import { save } from '@tauri-apps/plugin-dialog'
+import { writeFile } from '@tauri-apps/plugin-fs'
+import { api, IN_TAURI } from '../api'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toast'
 import { translateLogText } from '@/utils/logTranslator'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { HOT_CITIES, ALPHABET_CITY_GROUPS } from '@/data/cityData'
 import {
   Dialog,
   DialogContent,
@@ -16,6 +21,45 @@ import {
 // 1. 目标平台 (目前仅开放大麦网)
 const selectedPlatforms = ref(['damai', 'maoyan'])
 const selectedPlatformTab = ref('all')
+const damaiCategories = [
+  '曲苑杂坛',
+  '话剧歌剧',
+  '演唱会',
+  '音乐会',
+  '展览休闲',
+  '体育',
+  '舞蹈芭蕾',
+  '其他',
+  '儿童亲子'
+]
+const selectedDamaiCategory = ref('all')
+const maoyanCategories = [
+  '演唱会',
+  '话剧音乐剧',
+  '音乐节',
+  '脱口秀',
+  '音乐会',
+  '戏曲艺术',
+  '沉浸剧场',
+  '相声',
+  '休闲展览',
+  '亲子演出',
+  '舞蹈芭蕾',
+  'Livehouse',
+  '电竞赛事',
+  '体育赛事',
+  '剧本杀',
+  '其他'
+]
+const selectedMaoyanCategory = ref('all')
+
+const damaiCategoryValue = computed(() =>
+  selectedDamaiCategory.value === 'all' ? '' : selectedDamaiCategory.value
+)
+
+const maoyanCategoryValue = computed(() =>
+  selectedMaoyanCategory.value === 'all' ? '' : selectedMaoyanCategory.value
+)
 
 function setPlatformTab(tab) {
   if (tab === 'all') {
@@ -27,6 +71,10 @@ function setPlatformTab(tab) {
   } else if (tab === 'maoyan') {
     selectedPlatformTab.value = tab
     selectedPlatforms.value = ['maoyan']
+  } else if (tab === 'showstart') {
+    selectedPlatformTab.value = tab
+    selectedPlatforms.value = ['showstart']
+    toast.warn('秀动 ShowStart 平台数据采集功能正在开发中，暂未开放')
   } else {
     selectedPlatformTab.value = tab
     selectedPlatforms.value = ['damai']
@@ -42,66 +90,20 @@ function triggerToast(msg, type = 'default') {
   else toast(msg)
 }
 
-// 2. 按大区分类的全国完整 34 省市 (354+ 城市)
-const regionCategories = [
-  {
-    region: '🔥 热门 & 直辖市',
-    provinces: [
-      { name: '直辖市 & 特区', cities: ['北京', '上海', '天津', '重庆', '香港', '澳门'] },
-      { name: '核心热门市', cities: ['广州', '深圳', '成都', '杭州', '武汉', '南京', '西安', '苏州', '长沙', '青岛', '宁波', '厦门', '福州', '合肥', '郑州', '昆明', '贵阳', '南昌'] }
-    ]
-  },
-  {
-    region: '🌊 华东地区',
-    provinces: [
-      { name: '浙江省', cities: ['杭州', '宁波', '温州', '嘉兴', '湖州', '绍兴', '金华', '衢州', '舟山', '台州', '丽水', '义乌', '慈溪'] },
-      { name: '江苏省', cities: ['南京', '苏州', '无锡', '常州', '南通', '扬州', '徐州', '连云港', '淮安', '盐城', '镇江', '泰州', '宿迁', '昆山', '江阴'] },
-      { name: '山东省', cities: ['济南', '青岛', '淄博', '枣庄', '东营', '烟台', '潍坊', '济宁', '泰安', '威海', '日照', '临沂', '德州', '聊城', '滨州', '菏泽'] },
-      { name: '福建省', cities: ['福州', '厦门', '莆田', '三明', '泉州', '漳州', '南平', '龙岩', '宁德', '晋江'] },
-      { name: '安徽省', cities: ['合肥', '芜湖', '蚌埠', '淮南', '马鞍山', '淮北', '铜陵', '安庆', '黄山', '滁州', '阜阳', '宿州', '六安', '亳州', '池州', '宣城'] }
-    ]
-  },
-  {
-    region: '🌴 华南地区',
-    provinces: [
-      { name: '广东省', cities: ['广州', '深圳', '珠海', '佛山', '东莞', '中山', '惠州', '江门', '汕头', '湛江', '肇庆', '清远', '韶关', '河源', '梅州', '汕尾', '阳江', '茂名', '潮州', '揭阳', '云浮'] },
-      { name: '广西壮族自治区', cities: ['南宁', '柳州', '桂林', '梧州', '北海', '防城港', '钦州', '贵港', '玉林', '百色', '贺州', '河池', '来宾', '崇左'] },
-      { name: '海南省', cities: ['海口', '三亚', '三沙', '儋州', '文昌', '琼海', '万宁', '东方'] }
-    ]
-  },
-  {
-    region: '🏛️ 华北 & 中原',
-    provinces: [
-      { name: '河南省', cities: ['郑州', '开封', '洛阳', '平顶山', '安阳', '鹤壁', '新乡', '焦作', '濮阳', '许昌', '漯河', '南阳', '商丘', '信阳', '周口', '驻马店'] },
-      { name: '湖北省', cities: ['武汉', '宜昌', '襄阳', '荆州', '黄石', '十堰', '孝感', '黄冈', '咸宁', '恩施', '随州', '鄂州', '荆门'] },
-      { name: '湖南省', cities: ['长沙', '株洲', '湘潭', '衡阳', '邵阳', '岳阳', '常德', '张家界', '益阳', '郴州', '永州', '怀化', '娄底'] },
-      { name: '河北省', cities: ['石家庄', '唐山', '秦皇岛', '邯郸', '邢台', '保定', '张家口', '承德', '沧州', '廊坊', '衡水', '雄安新区'] },
-      { name: '山西省', cities: ['太原', '大同', '阳泉', '长治', '晋城', '朔州', '晋中', '运城', '忻州', '临汾', '吕梁'] }
-    ]
-  },
-  {
-    region: '🏔️ 西南 & 西北 & 东北',
-    provinces: [
-      { name: '四川省', cities: ['成都', '绵阳', '德阳', '宜宾', '泸州', '南充', '乐山', '自贡', '攀枝花', '达州', '遂宁', '内江', '眉山', '广安', '雅安', '巴中', '广元'] },
-      { name: '陕西省', cities: ['西安', '铜川', '宝鸡', '咸阳', '渭南', '延安', '汉中', '榆林', '安康', '商洛'] },
-      { name: '云南 / 贵州', cities: ['昆明', '曲靖', '玉溪', '保山', '昭通', '丽江', '贵阳', '遵义', '六盘水', '安顺'] },
-      { name: '东北三省', cities: ['沈阳', '大连', '鞍山', '锦州', '长春', '吉林', '哈尔滨', '齐齐哈尔', '大庆', '牡丹江'] },
-      { name: '西北/其它', cities: ['兰州', '西宁', '银川', '乌鲁木齐', '呼和浩特', '包头', '拉萨', '台北'] }
-    ]
-  }
-]
+// 2. 演艺多平台完整城市列表 (热门城市及 A-Z 拼音字母索引)
+const activeLetter = ref('ALL')
+const alphabetLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'W', 'X', 'Y', 'Z']
+const cityScrollAreaRef = ref(null)
+let isProgrammaticScroll = false
+let programmaticScrollTimer = null
 
-// 摊平全国完整城市列表 (354+ 市)
+// 摊平全国完整城市列表 (650+ 市)
 const allFlatCities = computed(() => {
-  const list = []
-  regionCategories.forEach(reg => {
-    reg.provinces.forEach(p => {
-      p.cities.forEach(c => {
-        if (!list.includes(c)) list.push(c)
-      })
-    })
+  const set = new Set(HOT_CITIES)
+  ALPHABET_CITY_GROUPS.forEach(g => {
+    g.cities.forEach(c => set.add(c))
   })
-  return list
+  return Array.from(set)
 })
 
 // 已选城市列表 (默认 ['北京'])
@@ -112,38 +114,111 @@ const isAllSelected = computed(() => {
   return selectedCities.value.length === 1 && selectedCities.value[0] === '全部'
 })
 
-// 按大区分类并支持关键词筛选的城市分组数据
-const groupedRegionCategories = computed(() => {
+// 热门城市组 (支持搜索过滤)
+const filteredHotCities = computed(() => {
   const query = searchCityQuery.value.trim().toLowerCase()
-  return regionCategories.map(reg => {
-    const cities = []
-    reg.provinces.forEach(p => {
-      p.cities.forEach(c => {
-        if (!cities.includes(c)) cities.push(c)
-      })
-    })
+  if (!query) return HOT_CITIES
+  return HOT_CITIES.filter(c => c.toLowerCase().includes(query))
+})
+
+// 按字母分组 (保留所有字母组，渲染完整列表，支持定位平滑滚动及上下自由浏览)
+const groupedAlphabetCategories = computed(() => {
+  const query = searchCityQuery.value.trim().toLowerCase()
+  return ALPHABET_CITY_GROUPS.map(g => {
     const matchingCities = query
-      ? cities.filter(c => c.toLowerCase().includes(query))
-      : cities
+      ? g.cities.filter(c => c.toLowerCase().includes(query))
+      : g.cities
 
     return {
-      region: reg.region,
+      letter: g.letter,
       matchingCities
+    }
+  }).filter(g => g.matchingCities.length > 0)
+})
+
+function scrollToLetter(letter) {
+  activeLetter.value = letter
+  isProgrammaticScroll = true
+  if (programmaticScrollTimer) clearTimeout(programmaticScrollTimer)
+  programmaticScrollTimer = setTimeout(() => {
+    isProgrammaticScroll = false
+  }, 700)
+
+  nextTick(() => {
+    if (!cityScrollAreaRef.value) return
+    const scrollEl = cityScrollAreaRef.value.$el || cityScrollAreaRef.value
+    const viewport = scrollEl.querySelector?.('[data-radix-scroll-area-viewport]') || scrollEl
+
+    if (!viewport) return
+
+    if (letter === 'ALL') {
+      viewport.scrollTo({ top: 0, behavior: 'smooth' })
+      return
+    }
+
+    const targetId = `city-group-${letter}`
+    const targetEl = viewport.querySelector(`#${targetId}`)
+    if (targetEl) {
+      const viewportRect = viewport.getBoundingClientRect()
+      const targetRect = targetEl.getBoundingClientRect()
+      const targetScrollTop = Math.max(
+        0,
+        targetRect.top - viewportRect.top + viewport.scrollTop - 12
+      )
+      viewport.scrollTo({ top: targetScrollTop, behavior: 'smooth' })
+    }
+  })
+}
+
+function handleCityAreaScroll(e) {
+  if (isProgrammaticScroll) return
+  const viewport = e.target
+  if (!viewport) return
+
+  const viewportRect = viewport.getBoundingClientRect()
+  const groupElements = viewport.querySelectorAll('[id^="city-group-"]')
+
+  let currentActive = 'ALL'
+  let minDiff = Infinity
+
+  groupElements.forEach(el => {
+    const rect = el.getBoundingClientRect()
+    const diff = Math.abs(rect.top - viewportRect.top)
+    if (rect.top <= viewportRect.top + 60 && diff < minDiff) {
+      minDiff = diff
+      const id = el.id.replace('city-group-', '')
+      currentActive = id
+    }
+  })
+
+  if (currentActive) {
+    activeLetter.value = currentActive
+  }
+}
+
+onMounted(() => {
+  nextTick(() => {
+    if (!cityScrollAreaRef.value) return
+    const scrollEl = cityScrollAreaRef.value.$el || cityScrollAreaRef.value
+    const viewport = scrollEl.querySelector?.('[data-radix-scroll-area-viewport]') || scrollEl
+    if (viewport) {
+      viewport.addEventListener('scroll', handleCityAreaScroll, { passive: true })
     }
   })
 })
 
-function toggleCity(city) {
-  if (isAllSelected.value) {
-    selectedCities.value = [city]
-    return
+onUnmounted(() => {
+  if (cityScrollAreaRef.value) {
+    const scrollEl = cityScrollAreaRef.value.$el || cityScrollAreaRef.value
+    const viewport = scrollEl.querySelector?.('[data-radix-scroll-area-viewport]') || scrollEl
+    if (viewport) {
+      viewport.removeEventListener('scroll', handleCityAreaScroll)
+    }
   }
-  const index = selectedCities.value.indexOf(city)
-  if (index > -1) {
-    selectedCities.value.splice(index, 1)
-  } else {
-    selectedCities.value.push(city)
-  }
+})
+
+function selectCity(city) {
+  selectedCities.value = [city]
 }
 
 // 执行参数：采集页数上限 (空字符串 = 全量)
@@ -153,6 +228,24 @@ const autoRetry = ref(true)
 // 冰拓凭据检查状态
 const bingtuoStatus = ref({ hasCredentials: false, username: '' })
 const isCheckingBingtuo = ref(false)
+const bingtuoPoints = ref(null)
+const bingtuoBalanceState = ref('idle') // idle | loading | ready | unconfigured | error
+const bingtuoBalanceError = ref('')
+
+const bingtuoPointsDisplay = computed(() => {
+  if (bingtuoBalanceState.value === 'loading') return '...'
+  if (bingtuoPoints.value === null || bingtuoPoints.value === undefined) return '--'
+  const points = Number(bingtuoPoints.value)
+  return Number.isFinite(points) ? points.toLocaleString() : String(bingtuoPoints.value)
+})
+
+const bingtuoBalanceHint = computed(() => {
+  if (bingtuoBalanceState.value === 'loading') return '正在查询平台余额'
+  if (bingtuoBalanceState.value === 'unconfigured') return '请先在系统设置中配置'
+  if (bingtuoBalanceState.value === 'error') return '查询失败，点击卡片重试'
+  if (bingtuoBalanceState.value === 'ready') return '点击卡片可刷新余额'
+  return '等待查询余额'
+})
 
 // ---- 真实采集任务状态（对接后端 /api/crawl）----
 const activeJob = ref(null)   // 当前/最近一次任务记录
@@ -162,6 +255,7 @@ const todayShows = ref(0)     // 今日本地新增采集数据数
 const starting = ref(false)
 const submitError = ref('')
 const logConsoleEl = ref(null)
+const exportingLogs = ref(false)
 let pollTimer = null
 
 // 后端 JobState → 中文
@@ -177,8 +271,18 @@ const isCrawling = computed(() =>
 
 function sourcesLabel(sources) {
   return (sources || [])
-    .map(s => (s === 'damai' ? '大麦网' : s === 'maoyan' ? '猫眼' : s))
+    .map(s => (s === 'damai' ? '大麦网' : s === 'maoyan' ? '猫眼' : s === 'showstart' ? '秀动' : s))
     .join('/') || '大麦网'
+}
+
+function taskResultCounts(result = {}) {
+  const imported = Number(result.show_count ?? 0) || 0
+  const breakdown = result.ledger_hidden_by_category || {}
+  const breakdownHidden = Object.values(breakdown)
+    .reduce((sum, value) => sum + (Number(value) || 0), 0)
+  const hidden = Number(result.ledger_hidden_count ?? breakdownHidden) || 0
+  const visible = Number(result.ledger_visible_count ?? Math.max(0, imported - hidden)) || 0
+  return { imported, visible, hidden }
 }
 
 // ---- 任务格式化与分页 ----
@@ -213,15 +317,19 @@ const taskRowsFormatted = computed(() => {
     const pages = j.job?.max_pages === 0 ? '全部' : (j.job?.max_pages || 10)
     const startTime = j.started_at ? formatDateTime(j.started_at) : (j.created_at ? formatDateTime(j.created_at) : '-')
     const endTime = j.finished_at ? formatDateTime(j.finished_at) : '-'
+    const resultCounts = taskResultCounts(j.result)
 
     out.push({
       key: j.id || index,
       taskNo,
       city,
       platform: sourcesLabel(j.job?.sources),
+      category: j.job?.category || '全部分类',
       pages,
       state: j.state || 'succeeded',
-      count: j.result?.show_count ?? 0,
+      count: resultCounts.imported,
+      ledgerVisibleCount: resultCounts.visible,
+      ledgerHiddenCount: resultCounts.hidden,
       startTime,
       endTime,
       rawJob: j
@@ -232,9 +340,38 @@ const taskRowsFormatted = computed(() => {
 
 // ---- 日志清空与复制 ----
 const isLogCleared = ref(false)
+const isUserScrolledUpLogConsole = ref(false)
+
+function handleLogConsoleScroll(e) {
+  const el = e?.target || logConsoleEl.value
+  if (!el) return
+  const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  // 距离底部大于 30px 时判定为用户主动向上翻页查看历史日志，暂停强制置底
+  isUserScrolledUpLogConsole.value = distanceFromBottom > 15
+}
+
+function scrollToLogBottom() {
+  isUserScrolledUpLogConsole.value = false
+  nextTick(() => {
+    const el = logConsoleEl.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+function activateJobRecord(job) {
+  const currentId = activeJob.value?.id || ''
+  const nextId = job?.id || ''
+  if (nextId && nextId !== currentId) {
+    // 新任务必须使用全新的日志视图；之前点过 Clear 也不能影响新任务。
+    isLogCleared.value = false
+    isUserScrolledUpLogConsole.value = false
+  }
+  activeJob.value = job
+}
 
 function clearLogs() {
   isLogCleared.value = true
+  isUserScrolledUpLogConsole.value = false
   triggerToast('✓ 已成功清空实时日志输出', 'success')
 }
 
@@ -243,7 +380,9 @@ async function copyLogs() {
     triggerToast('当前没有可复制的日志内容', 'warn')
     return
   }
-  const text = displayLogs.value.map(l => `[${l.time}] [${l.type}] ${l.text}`).join('\n')
+  const text = displayLogs.value
+    .map(l => `[${l.time}] [${l.levelLabel || mapLogLevelLabel(l.type)}] ${l.text}`)
+    .join('\n')
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       await navigator.clipboard.writeText(text)
@@ -261,12 +400,117 @@ async function copyLogs() {
   }
 }
 
+function buildTaskLogExport(job) {
+  const rows = Array.isArray(job?.logs) ? job.logs : []
+  const taskId = job?.id ? `任务-${job.id.slice(0, 8).toUpperCase()}` : '未知任务'
+  const sources = sourcesLabel(job?.job?.sources)
+  const cities = Array.isArray(job?.job?.cities) && job.job.cities.length
+    ? job.job.cities.join('、')
+    : '全国'
+  const pages = !job?.job?.max_pages || job.job.max_pages <= 0
+    ? '全部'
+    : String(job.job.max_pages)
+  const state = STATE_LABELS[job?.state] || job?.state || '未知'
+  const result = job?.result || {}
+  const resultCounts = taskResultCounts(result)
+  const lines = [
+    '大喜演出数据采集 - 任务运行日志',
+    '========================================',
+    `任务编号：${taskId}`,
+    `任务状态：${state}`,
+    `目标平台：${sources}`,
+    `目标城市：${cities}`,
+    `采集分类：${job?.job?.category || '全部分类'}`,
+    `采集页数：${pages} 页/城`,
+    `创建时间：${formatDateTime(job?.created_at)}`,
+    `开始时间：${formatDateTime(job?.started_at)}`,
+    `结束时间：${formatDateTime(job?.finished_at)}`,
+    `原始数据：${result.raw_count ?? 0} 条`,
+    `入库：${resultCounts.imported} 条`,
+    `台账可见：${resultCounts.visible} 条`,
+    `隐藏展览休闲/体育：${resultCounts.hidden} 条`,
+    `错误摘要：${job?.error ? translateLogText(job.error) : '无'}`,
+    `日志条数：${rows.length} 条`,
+    '',
+    '================ 运行日志 ================',
+    '',
+  ]
+
+  for (const row of rows) {
+    const time = formatDateTime(row?.ts)
+    const level = mapLogLevelLabel(row?.level)
+    const text = translateLogText(row?.text || '')
+    lines.push(`[${time}] [${level}] ${text}`)
+  }
+
+  return lines.join('\r\n')
+}
+
+function taskLogFilename(job) {
+  const id = job?.id ? job.id.slice(0, 8).toUpperCase() : '未知'
+  const date = new Date(job?.started_at || job?.created_at || Date.now())
+  const pad = value => String(value).padStart(2, '0')
+  const stamp = Number.isNaN(date.getTime())
+    ? '未知时间'
+    : `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  const state = STATE_LABELS[job?.state] || '运行中'
+  return `任务-${id}_${stamp}_${state}.txt`
+}
+
+async function exportCurrentTaskLogs() {
+  const job = activeJob.value
+  const rows = Array.isArray(job?.logs) ? job.logs : []
+  if (!job || rows.length === 0) {
+    triggerToast('当前任务还没有可导出的日志', 'warn')
+    return
+  }
+
+  const filename = taskLogFilename(job)
+  const content = `\uFEFF${buildTaskLogExport(job)}`
+  exportingLogs.value = true
+  try {
+    if (IN_TAURI) {
+      const path = await save({
+        title: '导出当前任务日志',
+        defaultPath: filename,
+        filters: [{ name: '文本日志', extensions: ['txt'] }],
+      })
+      if (!path) return
+      await writeFile(path, new TextEncoder().encode(content))
+    } else {
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    }
+    triggerToast(`✓ 当前任务日志已导出：${filename}`, 'success')
+  } catch (e) {
+    triggerToast(`导出任务日志失败：${e?.message || e}`, 'error')
+  } finally {
+    exportingLogs.value = false
+  }
+}
+
 function mapLogLevel(level) {
   const u = String(level || 'INFO').toUpperCase()
   if (u === 'WARNING' || u === 'WARN') return 'WARN'
   if (u === 'ERROR' || u === 'CRITICAL') return 'ERROR'
   if (u === 'DEBUG') return 'DEBUG'
   return 'INFO'
+}
+
+function mapLogLevelLabel(level) {
+  const normalized = mapLogLevel(level)
+  if (normalized === 'ERROR') return '错误'
+  if (normalized === 'WARN') return '警告'
+  if (normalized === 'DEBUG') return '调试'
+  if (normalized === 'SUCCESS') return '成功'
+  return '信息'
 }
 
 function formatLogTime(ts) {
@@ -301,6 +545,7 @@ const logs = computed(() => {
     for (const row of engineLogs) {
       out.push({
         type: mapLogLevel(row.level),
+        levelLabel: mapLogLevelLabel(row.level),
         time: formatLogTime(row.ts),
         text: translateLogText(row.text || '')
       })
@@ -310,8 +555,9 @@ const logs = computed(() => {
 
   out.push({
     type: 'INFO',
+    levelLabel: '信息',
     time: formatLogTime(j.started_at || j.created_at),
-    text: `任务 ${j.id.slice(0, 8)} 状态=${STATE_LABELS[j.state] || j.state}，城市=${(j.job?.cities || []).join('、')}`
+    text: `任务 ${j.id.slice(0, 8)}，状态：${STATE_LABELS[j.state] || '未知'}，城市：${(j.job?.cities || []).join('、') || '全国'}`
   })
   return out
 })
@@ -326,7 +572,10 @@ watch(
   async () => {
     await nextTick()
     const el = logConsoleEl.value
-    if (el) el.scrollTop = el.scrollHeight
+    // 只有当用户没有主动向上滚动查看历史日志时，才自动随新日志刷到底部
+    if (el && !isUserScrolledUpLogConsole.value) {
+      el.scrollTop = el.scrollHeight
+    }
   },
   { deep: true }
 )
@@ -372,7 +621,16 @@ async function refreshJobs() {
     const [activeResp, listResp] = await Promise.all([api.activeCrawl(), api.listCrawls()])
     jobs.value = listResp.items || []
     const j = activeResp.active || (jobs.value.length ? jobs.value[0] : null)
-    activeJob.value = j
+    const previousJob = activeJob.value
+    activateJobRecord(j)
+    if (
+      previousJob?.id &&
+      previousJob.id === j?.id &&
+      previousJob.state !== j.state &&
+      ['succeeded', 'failed', 'cancelled'].includes(j.state)
+    ) {
+      refreshBingtuoBalance()
+    }
     if (isFirstLoad && j) {
       lastNotifiedJobIdState = `${j.id}:${j.state}`
       isFirstLoad = false
@@ -419,17 +677,30 @@ async function startCrawl() {
   } else {
     citiesToSubmit = selectedCities.value
   }
-  
+
   try {
-    await api.startCrawl({
+    const submittedJob = await api.startCrawl({
       sources: selectedPlatforms.value,
       cities: citiesToSubmit,
       keywords: [],
+      category: selectedPlatformTab.value === 'damai'
+        ? damaiCategoryValue.value
+        : selectedPlatformTab.value === 'maoyan'
+          ? maoyanCategoryValue.value
+          : '',
       max_pages: maxPages,
       headed: true
     })
+    // 提交接口已返回新任务及首批日志，立即切换，不等待下一轮轮询。
+    activateJobRecord(submittedJob)
+    jobs.value = [submittedJob, ...jobs.value.filter(job => job.id !== submittedJob.id)]
     const hint = isAllSelected.value ? '全国全量' : `${citiesToSubmit.length} 城`
-    toast.success(`已启动采集（${hint} · 最多 ${maxPages || '全部'} 页/城）`)
+    const categoryHint = selectedPlatformTab.value === 'damai'
+      ? ` · 大麦${damaiCategoryValue.value || '全部分类'}`
+      : selectedPlatformTab.value === 'maoyan'
+        ? ` · 猫眼${maoyanCategoryValue.value || '全部分类'}`
+        : ''
+    toast.success(`已启动采集（${hint}${categoryHint} · 最多 ${maxPages || '全部'} 页/城）`)
     await refreshJobs()
   } catch (e) {
     submitError.value = e.message || '启动采集失败'
@@ -471,6 +742,40 @@ async function checkBingtuo() {
   } finally {
     isCheckingBingtuo.value = false
   }
+}
+
+async function refreshBingtuoBalance() {
+  if (bingtuoBalanceState.value === 'loading') return
+  bingtuoBalanceState.value = 'loading'
+  bingtuoBalanceError.value = ''
+  try {
+    const data = await api.getBingtuoBalance()
+    if (!data.configured) {
+      bingtuoPoints.value = null
+      bingtuoBalanceState.value = 'unconfigured'
+      return
+    }
+    if (data.error) {
+      bingtuoPoints.value = null
+      bingtuoBalanceState.value = 'error'
+      bingtuoBalanceError.value = data.error
+      return
+    }
+    bingtuoPoints.value = data.points ?? 0
+    bingtuoBalanceState.value = 'ready'
+  } catch (e) {
+    bingtuoPoints.value = null
+    bingtuoBalanceState.value = 'error'
+    bingtuoBalanceError.value = e?.message || '余额查询失败'
+  }
+}
+
+async function checkBingtuoCredentials() {
+  const [hasCredentials] = await Promise.all([
+    checkBingtuo(),
+    refreshBingtuoBalance(),
+  ])
+  return hasCredentials
 }
 
 const showTaskDetailModal = ref(false)
@@ -518,7 +823,7 @@ async function cancelCurrentCrawlFromModal() {
 }
 
 onMounted(() => {
-  checkBingtuo()
+  checkBingtuoCredentials()
   refreshTotal()
   refreshJobs()
   pollTimer = setInterval(() => {
@@ -531,14 +836,20 @@ onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
 })
 
-defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
+defineExpose({
+  refreshTotal,
+  refreshJobs,
+  checkBingtuo,
+  checkBingtuoCredentials,
+  refreshBingtuoBalance,
+})
 </script>
 
 <template>
   <div class="crawl-view-container flex flex-col gap-5 p-5 bg-[#f8fafc] h-full overflow-y-auto min-h-0 pb-10">
 
     <!-- 1. 顶部状态 Banner (Top Banner Header - Dynamic Theme System Color Glassmorphism Card) -->
-    <div 
+    <div
       class="top-status-banner relative rounded-2xl p-6 md:p-7 text-white shadow-lg overflow-hidden transition-all shrink-0 border border-white/10"
       :style="{ background: 'linear-gradient(135deg, var(--primary) 0%, var(--primary-hover, var(--primary)) 100%)' }"
     >
@@ -565,9 +876,9 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
           </p>
         </div>
 
-        <!-- 右侧三大核心指标卡片 (系统主题透明 Glass Cards) -->
-        <div class="banner-right-stats grid grid-cols-1 sm:grid-cols-3 gap-3.5 w-full lg:w-auto">
-          
+        <!-- 右侧核心指标卡片 (系统主题透明 Glass Cards) -->
+        <div class="banner-right-stats grid grid-cols-2 lg:grid-cols-4 gap-3.5 w-full lg:w-auto">
+
           <!-- 指标 1：活跃采集任务 -->
           <div class="stat-card bg-white/15 backdrop-blur-md border border-white/20 rounded-xl p-4 min-w-[150px] flex flex-col justify-between hover:bg-white/20 transition-all shadow-xs">
             <div class="flex items-center justify-between text-xs text-white/90 font-medium">
@@ -620,15 +931,43 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
             </div>
           </div>
 
+          <!-- 指标 4：冰拓剩余点数 -->
+          <button
+            type="button"
+            class="stat-card bg-white/15 backdrop-blur-md border border-white/20 rounded-xl p-4 min-w-[150px] flex flex-col justify-between hover:bg-white/20 transition-all shadow-xs text-left disabled:cursor-wait"
+            :disabled="bingtuoBalanceState === 'loading'"
+            :title="bingtuoBalanceError || '点击刷新冰拓剩余点数'"
+            @click="refreshBingtuoBalance"
+          >
+            <div class="flex items-center justify-between text-xs text-white/90 font-medium w-full">
+              <span>冰拓剩余点数</span>
+              <svg class="w-4 h-4 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="9" stroke-width="2" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.5 9.5h6a2 2 0 0 1 0 4h-5a2 2 0 0 0 0 4h6M12 7v2.5M12 17.5V20" />
+              </svg>
+            </div>
+            <div class="flex items-baseline gap-1 mt-2.5 mb-1.5">
+              <span class="text-2xl font-black tracking-tight text-white font-mono">{{ bingtuoPointsDisplay }}</span>
+              <span class="text-xs text-white/80 font-medium">点</span>
+            </div>
+            <div class="text-[11px] text-white/85 flex items-center gap-1.5 mt-0.5">
+              <span
+                class="w-1.5 h-1.5 rounded-full bg-white"
+                :class="{ 'animate-pulse': bingtuoBalanceState === 'loading' }"
+              ></span>
+              <span>{{ bingtuoBalanceHint }}</span>
+            </div>
+          </button>
+
         </div>
       </div>
     </div>
 
-    <!-- 2. 中部主控制区 (Middle Section - 2 Columns Grid) -->
-    <div class="middle-grid-container grid grid-cols-1 lg:grid-cols-12 gap-5 shrink-0">
-      
-      <!-- 左列: >_ 任务控制台 (7 列) -->
-      <div class="lg:col-span-7 bg-white rounded-2xl p-6 border border-slate-200/80 shadow-sm flex flex-col justify-between">
+    <!-- 2. 中部主控制区 (Middle Section - Task Console Full Width Row) -->
+    <div class="middle-grid-container w-full shrink-0 mb-5">
+
+      <!-- 任务控制台 (全宽单行) -->
+      <div class="bg-white rounded-2xl p-6 border border-slate-200/80 shadow-sm flex flex-col gap-6">
         <div>
           <!-- Card Header -->
           <div class="flex items-center justify-between pb-4 border-b border-slate-100 mb-5">
@@ -636,259 +975,407 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
               <span class="font-mono font-bold text-lg" :style="{ color: 'var(--primary)' }">>_</span>
               <span>任务控制台</span>
             </div>
-            <span class="text-xs text-slate-400 font-normal">配置需要采集的物理及网络目标</span>
+            <span class="text-xs text-slate-400 font-normal">配置采集目标平台、地域城市及执行参数</span>
           </div>
 
           <!-- Step 1: 选择目标演艺平台 (Platform) -->
           <div class="step-group mb-6">
             <div class="text-xs font-bold text-slate-700 mb-3">1. 选择目标演艺平台 (Platform)</div>
             <div class="segmented-control bg-slate-100/80 p-1.5 rounded-xl flex items-center gap-1.5 border border-slate-200/60">
-              <button 
-                class="seg-btn flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all text-center cursor-pointer"
+              <Button
+                variant="ghost"
+                class="seg-btn flex-1 h-auto py-2 px-3 rounded-lg text-xs font-medium transition-all text-center cursor-pointer"
                 :class="selectedPlatformTab === 'all' ? 'bg-white text-slate-900 font-bold shadow-xs' : 'text-slate-500 hover:text-slate-800'"
                 @click="setPlatformTab('all')"
               >
                 全部平台 (All Platforms)
-              </button>
-              <button 
-                class="seg-btn flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all text-center cursor-pointer"
+              </Button>
+              <Button
+                variant="ghost"
+                class="seg-btn flex-1 h-auto py-2 px-3 rounded-lg text-xs font-medium transition-all text-center cursor-pointer"
                 :class="selectedPlatformTab === 'damai' ? 'bg-white font-bold shadow-xs' : 'text-slate-500 hover:text-slate-800'"
                 :style="selectedPlatformTab === 'damai' ? { color: 'var(--primary)' } : {}"
                 @click="setPlatformTab('damai')"
               >
                 大麦网 (Damai)
-              </button>
-              <button 
-                class="seg-btn flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-all text-center"
+              </Button>
+              <Button
+                variant="ghost"
+                class="seg-btn flex-1 h-auto py-2 px-3 rounded-lg text-xs font-medium transition-all text-center cursor-pointer"
                 :class="selectedPlatformTab === 'maoyan' ? 'bg-white text-slate-900 font-bold shadow-xs' : 'text-slate-400'"
                 @click="setPlatformTab('maoyan')"
               >
                 猫眼演出
-              </button>
+              </Button>
+              <Button
+                variant="ghost"
+                class="seg-btn flex-1 h-auto py-2 px-3 rounded-lg text-xs font-medium transition-all text-center cursor-pointer"
+                :class="selectedPlatformTab === 'showstart' ? 'bg-white text-slate-900 font-bold shadow-xs' : 'text-slate-400'"
+                @click="setPlatformTab('showstart')"
+              >
+                秀动ShowStart
+              </Button>
+            </div>
+
+            <div v-if="selectedPlatformTab === 'showstart'" class="mt-4 p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs text-slate-500 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                <span class="font-medium">秀动 ShowStart 平台采集接口正在适配中，暂未开放。</span>
+              </div>
+              <span class="text-[11px] font-semibold text-slate-400 px-2 py-0.5 rounded bg-slate-200/60">暂未开放</span>
+            </div>
+
+            <div v-if="selectedPlatformTab === 'damai'" class="mt-4 flex items-start gap-3">
+              <span class="text-xs font-bold text-slate-500 shrink-0 leading-8">分类：</span>
+              <div class="flex flex-wrap items-center gap-x-1.5 gap-y-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  class="h-8 px-3 text-xs font-semibold transition-colors cursor-pointer"
+                  :class="selectedDamaiCategory === 'all' ? 'text-white' : 'text-slate-700 hover:bg-slate-100'"
+                  :style="selectedDamaiCategory === 'all' ? { backgroundColor: 'var(--primary)' } : {}"
+                  @click="selectedDamaiCategory = 'all'"
+                >
+                  全部
+                </Button>
+                <Button
+                  v-for="category in damaiCategories"
+                  :key="category"
+                  type="button"
+                  variant="ghost"
+                  class="h-8 px-3 text-xs font-semibold transition-colors cursor-pointer"
+                  :class="selectedDamaiCategory === category ? 'text-white' : 'text-slate-700 hover:bg-slate-100'"
+                  :style="selectedDamaiCategory === category ? { backgroundColor: 'var(--primary)' } : {}"
+                  @click="selectedDamaiCategory = category"
+                >
+                  {{ category }}
+                </Button>
+              </div>
+            </div>
+
+            <div v-if="selectedPlatformTab === 'maoyan'" class="mt-4 flex items-start gap-3">
+              <span class="text-xs font-bold text-slate-500 shrink-0 leading-8">分类：</span>
+              <div class="flex flex-wrap items-center gap-x-1.5 gap-y-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  class="h-8 px-3 text-xs font-semibold transition-colors cursor-pointer"
+                  :class="selectedMaoyanCategory === 'all' ? 'text-white' : 'text-slate-700 hover:bg-slate-100'"
+                  :style="selectedMaoyanCategory === 'all' ? { backgroundColor: 'var(--primary)' } : {}"
+                  @click="selectedMaoyanCategory = 'all'"
+                >
+                  全部
+                </Button>
+                <Button
+                  v-for="category in maoyanCategories"
+                  :key="category"
+                  type="button"
+                  variant="ghost"
+                  class="h-8 px-3 text-xs font-semibold transition-colors cursor-pointer"
+                  :class="selectedMaoyanCategory === category ? 'text-white' : 'text-slate-700 hover:bg-slate-100'"
+                  :style="selectedMaoyanCategory === category ? { backgroundColor: 'var(--primary)' } : {}"
+                  @click="selectedMaoyanCategory = category"
+                >
+                  {{ category }}
+                </Button>
+              </div>
             </div>
           </div>
 
           <!-- Step 2: 选择目标地域城市 (Target Cities) -->
-          <div class="step-group">
+          <div class="step-group mb-5">
             <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
               <div class="flex items-center gap-2">
-                <span class="text-xs font-bold text-slate-700">2. 选择目标地域城市 (Target Cities)</span>
-                <span class="text-[11px] text-slate-400 font-normal">全量 {{ allFlatCities.length }} 市</span>
+                <span class="text-xs font-bold text-slate-700">2. 选择目标地域城市</span>
+                <span class="text-[11px] text-slate-400 font-normal">共 {{ allFlatCities.length }} 市</span>
               </div>
 
-              <div class="flex items-center gap-2">
+              <div class="flex items-center gap-2.5">
                 <!-- 搜索框 -->
-                <div class="relative w-40">
-                  <input 
-                    type="text" 
-                    v-model="searchCityQuery" 
-                    placeholder="搜索城市..." 
-                    class="w-full bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-lg px-2.5 py-1 outline-none focus:border-[var(--primary)] focus:bg-white transition-all pr-6"
+                <div class="relative w-44">
+                  <Input
+                    type="text"
+                    v-model="searchCityQuery"
+                    placeholder="搜索城市..."
+                    class="w-full bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-lg px-2.5 py-1 outline-none focus:border-[var(--primary)] focus:bg-white transition-all pr-6 h-8"
                   />
                   <span v-if="searchCityQuery" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600 cursor-pointer" @click="searchCityQuery = ''">✕</span>
                 </div>
 
-                <button 
-                  class="text-xs font-medium hover:underline cursor-pointer transition-colors"
-                  :style="{ color: 'var(--primary)' }"
-                  @click="selectedCities = ['全部']"
-                >
-                  全选
-                </button>
-                <span class="text-slate-300 text-xs">|</span>
-                <button 
-                  class="text-xs font-medium text-slate-400 hover:text-slate-600 cursor-pointer"
+                <Button
+                  variant="link"
+                  class="h-auto p-0 text-xs font-medium text-slate-400 hover:text-slate-600 cursor-pointer"
                   @click="selectedCities = []"
                 >
                   重置
-                </button>
+                </Button>
               </div>
             </div>
 
             <!-- 当前已选概况 -->
-            <div class="flex items-center gap-2 mb-2 text-xs">
+            <div class="flex items-center gap-2 mb-3 text-xs">
               <span class="text-slate-400 font-medium shrink-0">当前已选：</span>
-              <span v-if="isAllSelected" class="px-2 py-0.5 rounded text-[11px] font-bold" :style="{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)' }">全国全量 (354+ 市)</span>
+              <span v-if="isAllSelected" class="px-2.5 py-0.5 rounded text-[11px] font-bold" :style="{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)' }">🌐 全国全量 ({{ allFlatCities.length }} 市)</span>
               <span v-else-if="selectedCities.length === 0" class="text-slate-400 italic">未选择</span>
-              <div v-else class="flex flex-wrap gap-1 max-h-12 overflow-y-auto">
-                <span v-for="c in selectedCities.slice(0, 15)" :key="c" class="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+              <div v-else class="flex flex-wrap gap-1.5">
+                <span v-for="c in selectedCities" :key="c" class="px-2.5 py-0.5 rounded text-[11px] font-bold" :style="{ backgroundColor: 'var(--primary-light)', color: 'var(--primary)' }">
                   {{ c }}
                 </span>
-                <span v-if="selectedCities.length > 15" class="text-[11px] text-slate-400">等 {{ selectedCities.length }} 市</span>
               </div>
             </div>
 
-            <!-- 使用 Shadcn UI ScrollArea 组件：按区域（华东、华南、华北中原等）分组渲染 -->
-            <ScrollArea class="h-56 rounded-xl border border-slate-200/60 bg-slate-50/70 p-3">
-              <div class="space-y-3.5 pr-2">
-                <!-- "全国全量" 快捷按键 -->
-                <div v-if="!searchCityQuery" class="flex items-center gap-2 pb-2 border-b border-slate-200/50">
+            <!-- 按字母查找 快速索引定位条 (Alphabet Navigation Index) -->
+            <div class="flex items-center gap-1.5 overflow-x-auto py-1.5 mb-3 text-[11px] font-medium custom-dark-scrollbar border-b border-slate-100">
+              <span class="text-slate-400 font-bold shrink-0 mr-1">按字母查找:</span>
+              <Button
+                type="button"
+                variant="ghost"
+                class="h-auto px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer shrink-0"
+                :class="activeLetter === 'ALL' ? 'text-white shadow-2xs' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'"
+                :style="activeLetter === 'ALL' ? { backgroundColor: 'var(--primary)' } : {}"
+                @click="scrollToLetter('ALL')"
+              >
+                全部
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                class="h-auto px-2 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer shrink-0"
+                :class="activeLetter === 'HOT' ? 'text-white shadow-2xs' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'"
+                :style="activeLetter === 'HOT' ? { backgroundColor: 'var(--primary)' } : {}"
+                @click="scrollToLetter('HOT')"
+              >
+                热门
+              </Button>
+              <Button
+                v-for="letter in alphabetLetters"
+                :key="letter"
+                type="button"
+                variant="ghost"
+                class="h-auto px-1.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all cursor-pointer shrink-0"
+                :class="activeLetter === letter ? 'text-white shadow-2xs' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'"
+                :style="activeLetter === letter ? { backgroundColor: 'var(--primary)' } : {}"
+                @click="scrollToLetter(letter)"
+              >
+                {{ letter }}
+              </Button>
+            </div>
+
+            <!-- 固定高度的独立滚动视口，字母索引只滚动这里，不带动整个页面 -->
+            <ScrollArea
+              ref="cityScrollAreaRef"
+              class="h-[360px] rounded-xl border border-slate-200/60 bg-slate-50/70"
+            >
+              <div class="space-y-3 p-3 pr-5">
+                <!-- "全国全量" 快捷单选按钮 -->
+                <!-- <div v-if="!searchCityQuery && activeLetter === 'ALL'" class="flex items-center gap-2 pb-2 border-b border-slate-200/50">
                   <span class="text-[11px] font-bold text-slate-400 w-16 shrink-0">快捷选</span>
-                  <button 
-                    class="px-3 py-1 rounded-lg border text-xs font-semibold transition-all cursor-pointer"
-                    :class="isAllSelected ? 'shadow-xs' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'"
+                  <Button
+                    variant="outline"
+                    class="h-auto px-3 py-1 rounded-lg border text-xs font-semibold transition-all cursor-pointer"
+                    :class="isAllSelected ? 'shadow-xs font-semibold' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'"
                     :style="isAllSelected ? {
                       backgroundColor: 'var(--primary-light, #fde8f3)',
                       borderColor: 'var(--primary-border, #f9a8d4)',
                       color: 'var(--primary)'
                     } : {}"
-                    @click="selectedCities = ['全部']"
+                    @click="selectCity('全部')"
                   >
-                    🌐 全国全量 (所有 354+ 城市)
-                  </button>
+                    🌐 全国全量 (所有 {{ allFlatCities.length }} 城市)
+                  </Button>
+                </div> -->
+
+                <!-- 1. 热门城市分组 -->
+                <div
+                  v-if="filteredHotCities.length > 0"
+                  id="city-group-HOT"
+                  class="region-block space-y-2 pb-2 border-b border-slate-200/40"
+                >
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-bold text-slate-800 flex items-center gap-1">
+                      <span class="text-pink-500">🔥</span> 热门城市
+                    </span>
+                    <span class="text-[10px] text-slate-400 font-mono">({{ filteredHotCities.length }})</span>
+                  </div>
+                  <div class="flex flex-wrap gap-2 pl-0.5">
+                    <Button
+                      v-for="c in filteredHotCities"
+                      :key="'hot-' + c"
+                      variant="outline"
+                      class="city-chip h-auto px-2.5 py-1 rounded-lg border text-xs font-medium transition-all cursor-pointer"
+                      :class="selectedCities.includes(c) ? 'shadow-xs font-semibold' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'"
+                      :style="selectedCities.includes(c) ? {
+                        backgroundColor: 'var(--primary-light, #fde8f3)',
+                        borderColor: 'var(--primary-border, #f9a8d4)',
+                        color: 'var(--primary)'
+                      } : {}"
+                      @click="selectCity(c)"
+                    >
+                      {{ c }}
+                    </Button>
+                  </div>
                 </div>
 
-                <!-- 按大区分类渲染城市 -->
-                <template v-for="reg in groupedRegionCategories" :key="reg.region">
-                  <div v-if="reg.matchingCities.length > 0" class="region-block space-y-1.5">
+                <!-- 2. 按 A-Z 拼音字母分类渲染城市 -->
+                <template v-for="g in groupedAlphabetCategories" :key="g.letter">
+                  <div :id="`city-group-${g.letter}`" class="region-block space-y-2">
                     <div class="flex items-center gap-2">
-                      <span class="text-xs font-bold text-slate-700">{{ reg.region }}</span>
-                      <span class="text-[10px] text-slate-400 font-mono">({{ reg.matchingCities.length }})</span>
+                      <span class="text-xs font-mono font-black text-slate-700 bg-slate-200/70 px-2 py-0.5 rounded-md">{{ g.letter }}</span>
+                      <span class="text-[10px] text-slate-400 font-mono">({{ g.matchingCities.length }})</span>
                     </div>
-                    <div class="flex flex-wrap gap-1.5 pl-0.5">
-                      <button
-                        v-for="c in reg.matchingCities"
-                        :key="c"
-                        class="city-chip px-2.5 py-1 rounded-lg border text-xs font-medium transition-all cursor-pointer"
+                    <div class="flex flex-wrap gap-2 pl-0.5">
+                      <Button
+                        v-for="c in g.matchingCities"
+                        :key="g.letter + '-' + c"
+                        variant="outline"
+                        class="city-chip h-auto px-2.5 py-1 rounded-lg border text-xs font-medium transition-all cursor-pointer"
                         :class="selectedCities.includes(c) ? 'shadow-xs font-semibold' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'"
                         :style="selectedCities.includes(c) ? {
                           backgroundColor: 'var(--primary-light, #fde8f3)',
                           borderColor: 'var(--primary-border, #f9a8d4)',
                           color: 'var(--primary)'
                         } : {}"
-                        @click="toggleCity(c)"
+                        @click="selectCity(c)"
                       >
                         {{ c }}
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </template>
 
                 <!-- 搜索无匹配时的提示 -->
-                <div v-if="groupedRegionCategories.every(r => r.matchingCities.length === 0)" class="py-8 text-center text-xs text-slate-400">
+                <div v-if="filteredHotCities.length === 0 && groupedAlphabetCategories.length === 0" class="py-6 text-center text-xs text-slate-400">
                   未找到匹配“{{ searchCityQuery }}”的城市
                 </div>
               </div>
             </ScrollArea>
           </div>
-        </div>
-      </div>
 
-      <!-- 右列: 执行参数 (5 列) -->
-      <div class="lg:col-span-5 bg-white rounded-2xl p-6 border border-slate-200/80 shadow-sm flex flex-col justify-between">
-        <div>
-          <!-- Card Header -->
-          <div class="flex items-center justify-between pb-4 border-b border-slate-100 mb-5">
-            <div class="flex items-center gap-2 font-bold text-slate-800 text-base">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
-              </svg>
-              <span>执行参数</span>
-            </div>
-            <span class="text-xs text-slate-400 font-normal">限制爬虫线程及范围</span>
-          </div>
-
-          <div class="space-y-4">
-            <!-- 采集页数上限 (Max Pages) -->
-            <div>
-              <label class="block text-xs font-bold text-slate-700 mb-1.5">采集页数上限 (Max Pages)</label>
-              <div class="relative">
-                <input 
-                  type="number" 
-                  v-model="maxPagesInput" 
-                  min="1" 
-                  max="9999" 
-                  placeholder="留空 = 采集全量页"
-                  class="w-full bg-slate-50 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl px-3.5 py-2.5 outline-none focus:border-[var(--primary)] focus:bg-white transition-all pr-20 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                />
-                <span class="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-400 pointer-events-none">页 / 城</span>
-              </div>
-              
-              <!-- 快捷页数选项 -->
-              <div class="flex items-center gap-1.5 mt-2 bg-slate-100/70 p-1 rounded-xl border border-slate-200/50">
-                <button 
-                  type="button" 
-                  class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all cursor-pointer text-center"
-                  :class="maxPagesInput === '' ? 'bg-white font-bold shadow-xs' : 'text-slate-500 hover:text-slate-800'"
-                  :style="maxPagesInput === '' ? { color: 'var(--primary)' } : {}"
-                  @click="maxPagesInput = ''"
-                >
-                  全量
-                </button>
-                <button 
-                  type="button" 
-                  class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all cursor-pointer text-center"
-                  :class="maxPagesInput === '3' ? 'bg-white font-bold shadow-xs' : 'text-slate-500 hover:text-slate-800'"
-                  :style="maxPagesInput === '3' ? { color: 'var(--primary)' } : {}"
-                  @click="maxPagesInput = '3'"
-                >
-                  3 页
-                </button>
-                <button 
-                  type="button" 
-                  class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all cursor-pointer text-center"
-                  :class="maxPagesInput === '10' ? 'bg-white font-bold shadow-xs' : 'text-slate-500 hover:text-slate-800'"
-                  :style="maxPagesInput === '10' ? { color: 'var(--primary)' } : {}"
-                  @click="maxPagesInput = '10'"
-                >
-                  10 页
-                </button>
-                <button 
-                  type="button" 
-                  class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold transition-all cursor-pointer text-center"
-                  :class="maxPagesInput === '50' ? 'bg-white font-bold shadow-xs' : 'text-slate-500 hover:text-slate-800'"
-                  :style="maxPagesInput === '50' ? { color: 'var(--primary)' } : {}"
-                  @click="maxPagesInput = '50'"
-                >
-                  50 页
-                </button>
-              </div>
-            </div>
-
-            <!-- 失败任务自动重试 Switch -->
-            <div class="pt-2">
-              <div class="flex items-center justify-between">
-                <div>
-                  <div class="text-xs font-bold text-slate-800">失败任务自动重试</div>
-                  <div class="text-[11px] text-slate-400 mt-0.5">开启后，请求失败将尝试最多3次重试</div>
+          <!-- Step 3: 执行参数融入目标地域城市底部 (Execution Parameters & Action Button) -->
+          <div class="step-group pt-5 mt-5 border-t border-slate-100">
+            <div class="flex items-center justify-between mb-3.5">
+              <div class="flex items-center gap-2 font-bold text-slate-800 text-xs">
+                <div class="w-6 h-6 rounded-lg flex items-center justify-center shrink-0" :style="{ color: 'var(--primary)', backgroundColor: 'var(--primary-light, #fde8f3)' }">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>
+                  </svg>
                 </div>
-                <label class="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" v-model="autoRetry" class="sr-only peer">
-                  <div 
-                    class="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all"
-                    :class="autoRetry ? 'bg-[var(--primary)]' : 'bg-slate-200'"
-                    :style="autoRetry ? { backgroundColor: 'var(--primary)' } : {}"
-                  ></div>
-                </label>
+                <span>3. 执行参数与任务控制 (Execution Parameters)</span>
               </div>
+              <span class="text-[11px] text-slate-400 font-normal">限制爬虫页数及自动重试策略</span>
+            </div>
+
+            <!-- 参数配置区 (双卡片 50-50 平行布局，精致瘦身) -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+
+              <!-- 左卡片: 采集页数上限 -->
+              <div class="bg-slate-50/80 rounded-xl py-2 px-3.5 border border-slate-200/60 flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
+                <span class="text-xs font-bold text-slate-700 shrink-0 flex items-center gap-1.5">
+                  <span class="w-1.5 h-1.5 rounded-full" :style="{ backgroundColor: 'var(--primary)' }"></span>
+                  页数上限
+                </span>
+
+                <div class="flex items-center gap-2">
+                  <div class="relative w-28 shrink-0">
+                    <Input
+                      type="number"
+                      v-model="maxPagesInput"
+                      min="1"
+                      max="9999"
+                      placeholder="全量"
+                      class="w-full bg-white border border-slate-200 text-slate-800 font-semibold text-xs rounded-lg px-2.5 py-1 outline-none focus:border-[var(--primary)] focus:bg-white transition-all pr-7 text-center shadow-2xs h-7.5"
+                    />
+                    <span class="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] font-medium text-slate-400 pointer-events-none">页</span>
+                  </div>
+
+                  <!-- 快捷 preset 按钮 -->
+                  <div class="flex items-center gap-0.5 bg-slate-200/50 p-0.5 rounded-lg shrink-0 border border-slate-200/60">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      class="h-6.5 px-2 rounded-md text-[11px] font-semibold transition-all cursor-pointer text-center"
+                      :class="maxPagesInput === '' ? 'text-white font-bold shadow-2xs' : 'text-slate-500 hover:text-slate-800'"
+                      :style="maxPagesInput === '' ? { backgroundColor: 'var(--primary)' } : {}"
+                      @click="maxPagesInput = ''"
+                    >
+                      全量
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      class="h-6.5 px-2 rounded-md text-[11px] font-semibold transition-all cursor-pointer text-center"
+                      :class="maxPagesInput === '3' ? 'text-white font-bold shadow-2xs' : 'text-slate-500 hover:text-slate-800'"
+                      :style="maxPagesInput === '3' ? { backgroundColor: 'var(--primary)' } : {}"
+                      @click="maxPagesInput = '3'"
+                    >
+                      3页
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      class="h-6.5 px-2 rounded-md text-[11px] font-semibold transition-all cursor-pointer text-center"
+                      :class="maxPagesInput === '10' ? 'text-white font-bold shadow-2xs' : 'text-slate-500 hover:text-slate-800'"
+                      :style="maxPagesInput === '10' ? { backgroundColor: 'var(--primary)' } : {}"
+                      @click="maxPagesInput = '10'"
+                    >
+                      10页
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      class="h-6.5 px-2 rounded-md text-[11px] font-semibold transition-all cursor-pointer text-center"
+                      :class="maxPagesInput === '50' ? 'text-white font-bold shadow-2xs' : 'text-slate-500 hover:text-slate-800'"
+                      :style="maxPagesInput === '50' ? { backgroundColor: 'var(--primary)' } : {}"
+                      @click="maxPagesInput = '50'"
+                    >
+                      50页
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 右卡片: 失败任务自动重试 Switch -->
+              <div class="bg-slate-50/80 rounded-xl py-2 px-3.5 border border-slate-200/60 flex items-center justify-between gap-3">
+                <div>
+                  <div class="text-xs font-bold text-slate-700 leading-tight">失败任务自动重试</div>
+                  <div class="text-[10px] text-slate-400 leading-tight mt-0.5">开启后，请求失败将自动重试最多3次</div>
+                </div>
+                <Switch
+                  v-model:checked="autoRetry"
+                  :style="autoRetry ? { backgroundColor: 'var(--primary)', borderColor: 'transparent' } : {}"
+                />
+              </div>
+
+            </div>
+
+            <!-- 主任务启动按钮 (单独单行) -->
+            <div class="w-full flex flex-col justify-center">
+              <div v-if="submitError" class="text-xs text-red-500 font-medium mb-1.5 text-center">{{ submitError }}</div>
+              <Button
+                class="w-full h-auto py-3.5 px-5 rounded-2xl text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg hover:shadow-xl hover:opacity-95 active:scale-[0.99] transition-all cursor-pointer"
+                :style="{
+                  backgroundColor: 'var(--primary)',
+                  boxShadow: '0 6px 18px -4px var(--primary-shadow, rgba(235, 79, 154, 0.35))'
+                }"
+                :disabled="starting"
+                @click="onEngineButton"
+              >
+                <template v-if="starting">
+                  <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                  <span>启动中...</span>
+                </template>
+                <template v-else-if="isCrawling">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg>
+                  <span>停止数据采集任务</span>
+                </template>
+                <template v-else>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  <span>开始数据采集任务</span>
+                </template>
+              </Button>
             </div>
           </div>
-        </div>
 
-        <!-- Primary Action Button -->
-        <div class="pt-6">
-          <div v-if="submitError" class="text-xs text-red-500 font-medium mb-2">{{ submitError }}</div>
-          <button 
-            class="w-full py-3 px-4 rounded-xl text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all active:scale-[0.99] cursor-pointer"
-            :style="{ 
-              backgroundColor: 'var(--primary)',
-              boxShadow: '0 8px 20px -4px var(--primary-shadow, rgba(235, 79, 154, 0.3))' 
-            }"
-            :disabled="starting"
-            @click="onEngineButton"
-          >
-            <template v-if="starting">
-              <span>启动中...</span>
-            </template>
-            <template v-else-if="isCrawling">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"/></svg>
-              <span>停止数据采集任务</span>
-            </template>
-            <template v-else>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              <span>开始数据采集任务</span>
-            </template>
-          </button>
         </div>
       </div>
 
@@ -905,48 +1392,71 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
             <span class="w-3 h-3 rounded-full bg-[#ffbd2e] inline-block"></span>
             <span class="w-3 h-3 rounded-full bg-[#27c93f] inline-block"></span>
           </div>
-          <span class="font-mono text-xs font-bold text-slate-300 tracking-wide">LIVE STDOUT - 运行日志</span>
+          <span class="font-mono text-xs font-bold text-slate-300 tracking-wide">实时输出 - 运行日志</span>
         </div>
 
         <div class="flex items-center gap-3">
           <span class="flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 font-mono">
             <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            LIVE
+            实时
           </span>
-          <button 
-            class="px-2.5 py-1 rounded-md text-xs text-slate-400 bg-slate-800 hover:bg-slate-700 hover:text-white font-mono transition-all cursor-pointer"
+          <Button
+            variant="ghost"
+            class="h-auto px-2.5 py-1 rounded-md text-xs text-slate-300 bg-slate-800 hover:bg-slate-700 hover:text-white font-mono transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+            :disabled="exportingLogs || !activeJob || !activeJob.logs?.length"
+            title="将当前任务的参数、结果和中文运行日志导出为 TXT"
+            @click="exportCurrentTaskLogs"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            {{ exportingLogs ? '导出中…' : '导出' }}
+          </Button>
+          <Button
+            variant="ghost"
+            class="h-auto px-2.5 py-1 rounded-md text-xs text-slate-400 bg-slate-800 hover:bg-slate-700 hover:text-white font-mono transition-all cursor-pointer"
             @click="clearLogs"
           >
-            Clear
-          </button>
+            清空
+          </Button>
         </div>
       </div>
 
       <!-- Console Log Output Area -->
-      <div class="terminal-body p-4 font-mono text-xs text-slate-300 min-h-[160px] max-h-[260px] overflow-y-auto leading-relaxed space-y-1.5 custom-dark-scrollbar" ref="logConsoleEl">
-        <template v-if="displayLogs.length > 0">
-          <div v-for="(l, i) in displayLogs" :key="i" class="log-line flex items-start gap-2.5">
-            <span class="text-slate-500 shrink-0 font-normal">{{ l.time }}</span>
-            <span 
-              class="px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 leading-none"
-              :class="{
-                'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30': l.type === 'SUCCESS',
-                'bg-sky-500/20 text-sky-400 border border-sky-500/30': l.type === 'INFO',
-                'bg-amber-500/20 text-amber-400 border border-amber-500/30': l.type === 'WARN',
-                'bg-rose-500/20 text-rose-400 border border-rose-500/30': l.type === 'ERROR',
-                'bg-slate-700 text-slate-400': l.type === 'DEBUG'
-              }"
-            >
-              {{ l.type }}
-            </span>
-            <span class="text-slate-200 font-normal break-all">{{ l.text }}</span>
-          </div>
-        </template>
-        <template v-else>
-          <div class="text-slate-600 text-xs py-8 text-center font-mono">
-            [日志已清空] 启动新采集任务后自动刷出最新引擎运行日志
-          </div>
-        </template>
+      <div class="relative">
+        <div class="terminal-body p-4 font-mono text-xs text-slate-300 min-h-[160px] max-h-[260px] overflow-y-auto leading-relaxed space-y-1.5 custom-dark-scrollbar" ref="logConsoleEl" @scroll="handleLogConsoleScroll">
+          <template v-if="displayLogs.length > 0">
+            <div v-for="(l, i) in displayLogs" :key="i" class="log-line flex items-start gap-2.5">
+              <span class="text-slate-500 shrink-0 font-normal">{{ l.time }}</span>
+              <span
+                class="px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 leading-none"
+                :class="{
+                  'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30': l.type === 'SUCCESS',
+                  'bg-sky-500/20 text-sky-400 border border-sky-500/30': l.type === 'INFO',
+                  'bg-amber-500/20 text-amber-400 border border-amber-500/30': l.type === 'WARN',
+                  'bg-rose-500/20 text-rose-400 border border-rose-500/30': l.type === 'ERROR',
+                  'bg-slate-700 text-slate-400': l.type === 'DEBUG'
+                }"
+              >
+                {{ l.levelLabel || mapLogLevelLabel(l.type) }}
+              </span>
+              <span class="text-slate-200 font-normal break-all">{{ l.text }}</span>
+            </div>
+          </template>
+          <template v-else>
+            <div class="text-slate-600 text-xs py-8 text-center font-mono">
+              [日志已清空] 启动新采集任务后自动刷出最新引擎运行日志
+            </div>
+          </template>
+        </div>
+
+        <!-- 向上翻阅日志时的快捷“恢复置底”按钮 -->
+        <button
+          v-if="isUserScrolledUpLogConsole"
+          type="button"
+          class="absolute right-6 bottom-4 px-2.5 py-1 rounded-full text-[11px] font-mono bg-slate-800/90 text-sky-400 hover:bg-slate-700 hover:text-white border border-sky-500/40 shadow-lg backdrop-blur-xs flex items-center gap-1 transition-all cursor-pointer z-10"
+          @click="scrollToLogBottom"
+        >
+          <span>↓ 恢复自动置底</span>
+        </button>
       </div>
     </div>
 
@@ -965,6 +1475,10 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
             <span class="text-slate-500">目标平台：</span>
             <span class="font-bold text-slate-800 dark:text-slate-200">{{ currentSelectedTaskDetail.platform }}</span>
           </div>
+          <div v-if="currentSelectedTaskDetail.rawJob?.job?.sources?.length === 1" class="flex items-center justify-between border-b pb-2">
+            <span class="text-slate-500">{{ currentSelectedTaskDetail.rawJob.job.sources[0] === 'damai' ? '大麦分类：' : '猫眼分类：' }}</span>
+            <span class="font-bold text-slate-800 dark:text-slate-200">{{ currentSelectedTaskDetail.category }}</span>
+          </div>
           <div class="flex items-center justify-between border-b pb-2">
             <span class="text-slate-500">目标城市：</span>
             <span class="font-bold text-slate-800 dark:text-slate-200">{{ currentSelectedTaskDetail.city }}</span>
@@ -980,8 +1494,16 @@ defineExpose({ refreshTotal, refreshJobs, checkBingtuo })
             </span>
           </div>
           <div class="flex items-center justify-between border-b pb-2">
-            <span class="text-slate-500">入库演出数量：</span>
+            <span class="text-slate-500">入库：</span>
             <span class="font-mono font-bold text-pink-600 text-sm">{{ currentSelectedTaskDetail.count }} 条</span>
+          </div>
+          <div class="flex items-center justify-between border-b pb-2">
+            <span class="text-slate-500">台账可见：</span>
+            <span class="font-mono font-bold text-emerald-600 text-sm">{{ currentSelectedTaskDetail.ledgerVisibleCount }} 条</span>
+          </div>
+          <div class="flex items-center justify-between border-b pb-2">
+            <span class="text-slate-500">隐藏展览休闲/体育：</span>
+            <span class="font-mono font-bold text-amber-600 text-sm">{{ currentSelectedTaskDetail.ledgerHiddenCount }} 条</span>
           </div>
         </div>
 

@@ -1,8 +1,10 @@
 """不启浏览器：只测各策略的 API 记录解析。"""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from contextlib import asynccontextmanager
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -15,6 +17,35 @@ from app.crawlers.maoyan import MaoyanCrawler
 
 class _DummySession:
     pass
+
+
+def _api_response(
+    body: str,
+    *,
+    status: int = 200,
+    headers: dict[str, str] | None = None,
+    url: str = "https://search.damai.cn/searchajax.html",
+):
+    return SimpleNamespace(
+        ok=200 <= status < 300,
+        status=status,
+        headers=headers or {"content-type": "application/json"},
+        url=url,
+        text=AsyncMock(return_value=body),
+        dispose=AsyncMock(),
+    )
+
+
+def _page_with_api(*responses):
+    request_get = AsyncMock(side_effect=list(responses))
+    return SimpleNamespace(
+        url="https://search.damai.cn/search.htm",
+        context=SimpleNamespace(request=SimpleNamespace(get=request_get)),
+        evaluate=AsyncMock(
+            side_effect=AssertionError("searchajax must not use the page execution context")
+        ),
+        wait_for_timeout=AsyncMock(),
+    )
 
 
 def test_damai_record_to_raw():
@@ -37,6 +68,41 @@ def test_damai_record_to_raw():
     assert "detail.damai.cn" in item.url
 
 
+def test_damai_skips_merchandise_mixed_into_performance_results():
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+
+    item = crawler._record_to_raw(
+        {
+            "projectid": "1065385649255",
+            "nameNoHtml": "薛之谦-万兽之王巡回演唱会-官方荧光棒",
+            "categoryid": 51,
+            "categoryname": "其他",
+            "venue": "演出场馆地址待定",
+        },
+        city="北京",
+        from_api=True,
+    )
+
+    assert item is None
+
+
+def test_damai_keeps_non_merchandise_other_category():
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+
+    item = crawler._record_to_raw(
+        {
+            "projectid": "other-event",
+            "nameNoHtml": "城市文化特别活动",
+            "categoryid": 51,
+            "categoryname": "其他",
+        },
+        city="北京",
+        from_api=True,
+    )
+
+    assert item is not None
+
+
 def test_maoyan_record_to_raw():
     c = MaoyanCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
     rec = {
@@ -56,6 +122,48 @@ def test_maoyan_record_to_raw():
     assert "180" in item.price_raw
 
 
+@pytest.mark.parametrize(
+    ("category", "category_id"),
+    [
+        ("", 0),
+        ("演唱会", 1),
+        ("话剧音乐剧", 4),
+        ("音乐节", 10),
+        ("戏曲艺术", 3),
+        ("沉浸剧场", 14),
+        ("Livehouse", 17),
+        ("其他", 8),
+    ],
+)
+def test_maoyan_category_is_added_to_api_path(category, category_id):
+    crawler = MaoyanCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+
+    url = crawler._build_api_url(city_id=1, page_no=2, category=category)
+
+    assert f"/performances/{category_id};st=0;p=2;" in url
+    assert "cityId=1" in url
+
+
+def test_maoyan_rejects_unknown_category():
+    crawler = MaoyanCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="unknown maoyan category"):
+        crawler._build_api_url(city_id=1, page_no=1, category="不存在")
+
+
+def test_maoyan_reads_category_from_live_response_field():
+    crawler = MaoyanCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+
+    item = crawler._record_to_raw(
+        {"performanceId": 1, "name": "某演出", "cornerDisplayName": "沉浸剧场"},
+        city="北京",
+        from_api=True,
+    )
+
+    assert item is not None
+    assert item.category == "沉浸剧场"
+
+
 def test_damai_extract_records_nested():
     c = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
     data = {
@@ -70,6 +178,35 @@ def test_damai_extract_records_nested():
     }
     recs = c._extract_records(data)
     assert len(recs) == 2
+
+
+def test_damai_category_is_added_to_search_urls():
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+
+    search_query = parse_qs(
+        urlparse(crawler._build_search_url("北京", "", 2, "话剧歌剧")).query,
+        keep_blank_values=True,
+    )
+    ajax_query = parse_qs(
+        urlparse(crawler._build_ajax_url("北京", "", 2, "话剧歌剧")).query,
+        keep_blank_values=True,
+    )
+
+    assert search_query["ctl"] == ["话剧歌剧"]
+    assert ajax_query["ctl"] == ["话剧歌剧"]
+    assert search_query["currPage"] == ["2"]
+    assert ajax_query["currPage"] == ["2"]
+
+
+def test_damai_empty_category_keeps_all_categories():
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+
+    query = parse_qs(
+        urlparse(crawler._build_ajax_url("上海", "", 1)).query,
+        keep_blank_values=True,
+    )
+
+    assert query["ctl"] == [""]
 
 
 def test_each_platform_has_own_captcha_solver():
@@ -151,24 +288,20 @@ async def test_damai_punish_navigation_does_not_solve_twice():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("raw", "message"),
+    ("response_or_error", "message"),
     [
-        ({"_fetch_error": True, "aborted": False, "error": "network down"}, "fetch error"),
-        ({"_parse_error": True, "status": 502, "text": "bad gateway"}, "non-json"),
+        (RuntimeError("network down"), "context request failed.*network down"),
+        (_api_response("bad gateway", status=502), "http status=502"),
     ],
 )
-async def test_damai_searchajax_failure_without_captcha_raises(raw, message):
+async def test_damai_searchajax_failure_without_captcha_raises(response_or_error, message):
     crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
     crawler.goto = AsyncMock(return_value=None)  # type: ignore[method-assign]
     crawler.captcha.detect = AsyncMock(return_value=None)  # type: ignore[method-assign]
     crawler.captcha.ensure_cleared = AsyncMock(  # type: ignore[method-assign]
         side_effect=AssertionError("ordinary API failures must not enter captcha solving")
     )
-    page = SimpleNamespace(
-        url="https://search.damai.cn/search.htm",
-        evaluate=AsyncMock(return_value=raw),
-        wait_for_timeout=AsyncMock(),
-    )
+    page = _page_with_api(response_or_error)
 
     with pytest.raises(RuntimeError, match=rf"searchajax failed.*page=1.*{message}"):
         await crawler._crawl_city_keyword(page, "上海", "", 1)
@@ -196,30 +329,84 @@ async def test_damai_later_searchajax_failure_does_not_return_partial_results():
             ],
         }
     }
-    page = SimpleNamespace(
-        url="https://search.damai.cn/search.htm",
-        evaluate=AsyncMock(
-            side_effect=[
-                first_page,
-                {"_fetch_error": True, "aborted": True, "error": "timeout"},
-            ]
-        ),
-        wait_for_timeout=AsyncMock(),
+    page = _page_with_api(
+        _api_response(json.dumps(first_page, ensure_ascii=False)),
+        RuntimeError("request timed out after 12000ms"),
     )
 
     with pytest.raises(RuntimeError, match="searchajax failed.*page=2"):
         await crawler._crawl_city_keyword(page, "上海", "", 3)
 
-    assert page.evaluate.await_count == 2
+    assert page.context.request.get.await_count == 2
+    assert page.evaluate.await_count == 0
 
 
 @pytest.mark.asyncio
-async def test_damai_fetch_helper_raises_typed_error_for_unexpected_payload():
+async def test_damai_fetch_helper_raises_typed_error_for_non_json_payload():
     crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
-    page = SimpleNamespace(evaluate=AsyncMock(return_value=None))
+    response = _api_response("null", headers={"content-type": "text/plain"})
+    page = _page_with_api(response)
 
-    with pytest.raises(_SearchAjaxError, match="unexpected response type=NoneType"):
+    with pytest.raises(_SearchAjaxError, match="non-json response status=200"):
         await crawler._fetch_search_ajax(page, city="上海", keyword="", page_no=1)
+
+    response.dispose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_damai_searchajax_does_not_depend_on_page_execution_context():
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+    crawler.goto = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    payload = {
+        "pageData": {
+            "totalPage": 1,
+            "resultData": [{"projectid": "nav-1", "nameNoHtml": "导航后恢复"}],
+        }
+    }
+    response = _api_response(json.dumps(payload, ensure_ascii=False))
+    page = _page_with_api(response)
+
+    items = await crawler._crawl_city_keyword(page, "北京", "", 1)
+
+    assert [item.source_id for item in items] == ["nav-1"]
+    assert page.evaluate.await_count == 0
+    response.dispose.assert_awaited_once()
+    request_kwargs = page.context.request.get.await_args.kwargs
+    assert request_kwargs["max_redirects"] == 0
+    assert request_kwargs["max_retries"] == 1
+    assert request_kwargs["timeout"] == 12000
+    assert request_kwargs["headers"]["x-requested-with"] == "XMLHttpRequest"
+    assert "HeadlessChrome" not in request_kwargs["headers"]["user-agent"]
+
+
+@pytest.mark.asyncio
+async def test_damai_searchajax_challenge_redirect_uses_existing_solver_flow():
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+    crawler.goto = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    challenge = _api_response(
+        "",
+        status=302,
+        headers={"location": "https://risk.damai.cn/punish?x=1"},
+    )
+    success_payload = {
+        "pageData": {
+            "totalPage": 1,
+            "resultData": [{"projectid": "after-captcha", "name": "验证后恢复"}],
+        }
+    }
+    success = _api_response(json.dumps(success_payload, ensure_ascii=False))
+    page = _page_with_api(challenge, success)
+
+    items = await crawler._crawl_city_keyword(page, "北京", "", 1)
+
+    assert [item.source_id for item in items] == ["after-captcha"]
+    assert crawler.goto.await_count == 2
+    assert crawler.goto.await_args_list[1].args[1].startswith(
+        "https://risk.damai.cn/punish"
+    )
+    assert page.evaluate.await_count == 0
+    challenge.dispose.assert_awaited_once()
+    success.dispose.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -251,6 +438,12 @@ async def test_damai_deduplicates_projects_before_detail_fetch(monkeypatch):
 
     monkeypatch.setattr(crawler_module, "enrich_items_detail", fake_enrich)
 
-    items = await crawler.crawl(cities=["上海", "北京"], keywords=[], max_pages=1)
+    items = await crawler.crawl(
+        cities=["上海", "北京"], keywords=[], max_pages=1, category="音乐会"
+    )
 
     assert [item.source_id for item in items] == ["same"]
+    assert [call.args[4] for call in crawler._crawl_city_keyword.await_args_list] == [
+        "音乐会",
+        "音乐会",
+    ]

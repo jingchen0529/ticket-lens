@@ -30,6 +30,8 @@ class CrawlRequest(BaseModel):
     sources: list[str] = Field(default_factory=lambda: ["damai", "maoyan"])
     cities: Optional[list[str]] = None
     keywords: Optional[list[str]] = None
+    # 单平台分类；大麦对应 ctl，猫眼对应 categoryId；空值表示全部分类。
+    category: str = Field(default="", max_length=50)
     # 每个城市/关键词最多翻页数。
     # None / 0 = 不限制，跟大麦 totalPage 采完全部；正整数 = 硬上限。
     max_pages: Optional[int] = Field(default=None, ge=0, le=9999)
@@ -56,6 +58,11 @@ def _parse_sources(sources: list[str]) -> list[SourcePlatform]:
     return out
 
 
+def _category_for_sources(sources: list[SourcePlatform], category: str) -> str:
+    """分类体系不跨平台共享，多平台任务强制按全部分类执行。"""
+    return category.strip() if len(sources) == 1 else ""
+
+
 @router.post("")
 async def start_crawl(req: CrawlRequest) -> dict:
     """提交一次采集任务。已有任务在跑时返回 409。"""
@@ -65,6 +72,8 @@ async def start_crawl(req: CrawlRequest) -> dict:
     sources = _parse_sources(req.sources)
     cities = req.cities if req.cities else list(cfg.crawl.cities)
     keywords = req.keywords if req.keywords is not None else list(cfg.crawl.keywords)
+    # 多平台任务不共享分类体系；仅单平台任务接受分类筛选。
+    category = _category_for_sources(sources, req.category)
     # 前端约定：不传 / null / 0 → 全量（job.max_pages=0）；正整数 → 上限
     # 不再回退配置文件的 max_pages:3，避免「留空却只采 3 页」
     if req.max_pages is None or req.max_pages == 0:
@@ -79,6 +88,7 @@ async def start_crawl(req: CrawlRequest) -> dict:
         sources=sources,
         cities=cities,
         keywords=keywords,
+        category=category,
         max_pages=max_pages,
         enrich_detail=True,  # 详情补全固定开启，不由前端控制
     )

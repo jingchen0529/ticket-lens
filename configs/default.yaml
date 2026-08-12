@@ -29,8 +29,17 @@ crawl:
   request_delay_seconds: 1.5
   scroll_pause_ms: 800
   enrich_detail: true
-  detail_delay_seconds: 0.35
-  detail_date_limit: 40
+  # subpage 全局最小间隔（秒），实际会再加 0～25% 随机抖动。
+  detail_delay_seconds: 1.5
+  # 0 = 不截断日期；如果限制导致不完整，任务会失败且拒绝降级入库。
+  detail_date_limit: 0
+  # 单个详情子请求最多 3 次，每次失败后固定等待 2 秒。
+  detail_retry_attempts: 3
+  detail_retry_delay_seconds: 2
+  detail_retry_max_backoff_seconds: 2
+  # 整项目不再冷却重跑；PC 失败转移动端，仍失败则继续下一个项目。
+  detail_project_attempts: 1
+  detail_project_cooldown_seconds: 0
 pipeline:
   dedupe: true
   drop_invalid: true

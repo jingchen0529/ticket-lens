@@ -13,6 +13,8 @@ from typing import Any
 
 import orjson
 
+from app.utils.show_visibility import LEDGER_HIDDEN_CATEGORIES
+
 
 @dataclass
 class ShowQuery:
@@ -45,7 +47,7 @@ _PERF_STATE_TIME_OP = {"upcoming": ">", "ongoing": "=", "done": "<"}
 
 # 不对外展示的演出大类：这两类不属于台账口径，查询/导出/筛选项一律排除。
 # 库里仍保留原始记录，只是查询层过滤，改动可逆。
-_EXCLUDED_CATEGORIES = ("展览休闲", "体育")
+_EXCLUDED_CATEGORIES = LEDGER_HIDDEN_CATEGORIES
 
 
 class ShowRepository:

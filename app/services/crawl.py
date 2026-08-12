@@ -14,6 +14,7 @@ from app.crawlers.registry import get_crawler
 from app.models import CrawlJob, CrawlResult, RawShowItem, SourcePlatform
 from app.pipeline.normalize import normalize_items
 from app.repositories.storage.factory import create_storage
+from app.utils.show_visibility import summarize_ledger_visibility
 
 logger = logging.getLogger(__name__)
 
@@ -49,35 +50,43 @@ async def run_crawl(job: CrawlJob, config: AppConfig) -> CrawlResult:
                 run_config.captcha,
                 platform=src.value,
             ) as session:
-                crawler = get_crawler(src, session, run_config)
-                # 任务级开关覆盖配置（桌面端可关详情加速）
-                if hasattr(job, "enrich_detail"):
-                    run_config.crawl.enrich_detail = bool(job.enrich_detail)
+                try:
+                    crawler = get_crawler(src, session, run_config)
+                    # 任务级开关覆盖配置（桌面端可关详情加速）
+                    if hasattr(job, "enrich_detail"):
+                        run_config.crawl.enrich_detail = bool(job.enrich_detail)
 
-                async def persist_item(item: RawShowItem) -> None:
-                    # 详情一返回就按场次规范化并替换该项目的库内记录。前端轮询
-                    # 数据库时能立即看到拆分结果，不必等整个城市/全国任务结束。
-                    item_shows = normalize_items([item], config.pipeline)
-                    storage.save_raw([item])
-                    storage.save_shows(item_shows)
-                    logger.info(
-                        "source %s item=%s persisted sessions=%s rows=%s",
-                        src.value,
-                        item.source_id,
-                        len(item.sessions_raw),
-                        len(item_shows),
+                    async def persist_item(item: RawShowItem) -> None:
+                        # 详情一返回就按场次规范化并替换该项目的库内记录。前端轮询
+                        # 数据库时能立即看到拆分结果，不必等整个城市/全国任务结束。
+                        item_shows = normalize_items([item], config.pipeline)
+                        storage.save_raw([item])
+                        storage.save_shows(item_shows)
+                        logger.info(
+                            "source %s item=%s persisted sessions=%s rows=%s",
+                            src.value,
+                            item.source_id,
+                            len(item.sessions_raw),
+                            len(item_shows),
+                        )
+
+                    items = await crawler.crawl(
+                        cities=job.cities,
+                        keywords=job.keywords,
+                        max_pages=job.max_pages,
+                        category=job.category,
+                        on_item=persist_item,
                     )
-
-                items = await crawler.crawl(
-                    cities=job.cities,
-                    keywords=job.keywords,
-                    max_pages=job.max_pages,
-                    on_item=persist_item,
-                )
-                raw_all.extend(items)
-                result.by_source[src.value] = len(items)
-                await session.save_platform_cookies(src.value)
-                logger.info("source %s raw=%s", src.value, len(items))
+                    raw_all.extend(items)
+                    result.by_source[src.value] = len(items)
+                    await session.save_platform_cookies(src.value)
+                    logger.info("source %s raw=%s", src.value, len(items))
+                except Exception as exc:  # noqa: BLE001
+                    # Log while the browser is still alive. The following context cleanup
+                    # is then clearly an effect of the failure, not its apparent cause.
+                    msg = f"{src.value}: {exc}"
+                    logger.exception("crawler failed: %s", msg)
+                    result.errors.append(msg)
         except Exception as exc:  # noqa: BLE001
             msg = f"{src.value}: {exc}"
             logger.exception("crawler failed: %s", msg)
@@ -86,6 +95,11 @@ async def run_crawl(job: CrawlJob, config: AppConfig) -> CrawlResult:
     shows = normalize_items(raw_all, config.pipeline)
     result.raw_count = len(raw_all)
     result.show_count = len(shows)
+    (
+        result.ledger_visible_count,
+        result.ledger_hidden_count,
+        result.ledger_hidden_by_category,
+    ) = summarize_ledger_visibility(show.category for show in shows)
     result.finished_at = datetime.utcnow()
 
     storage.save_raw(raw_all)
@@ -93,9 +107,12 @@ async def run_crawl(job: CrawlJob, config: AppConfig) -> CrawlResult:
     storage.save_result(result)
 
     logger.info(
-        "crawl finished raw=%s shows=%s out=%s errors=%s",
+        "crawl finished raw=%s shows=%s ledger_visible=%s ledger_hidden=%s "
+        "out=%s errors=%s",
         result.raw_count,
         result.show_count,
+        result.ledger_visible_count,
+        result.ledger_hidden_count,
         result.output_path,
         len(result.errors),
     )

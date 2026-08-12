@@ -122,15 +122,24 @@ class BrowserSession:
 
     async def stop(self) -> None:
         if self._context:
-            await self._context.close()
+            try:
+                await self._context.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("browser context cleanup failed: %s", exc)
             self._context = None
         if self._browser:
-            await self._browser.close()
+            try:
+                await self._browser.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("browser cleanup failed: %s", exc)
             self._browser = None
         if self._pw:
-            await self._pw.stop()
+            try:
+                await self._pw.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("playwright cleanup failed: %s", exc)
             self._pw = None
-        logger.info("browser stopped")
+        logger.info("browser cleanup complete")
 
     async def new_page(self) -> Page:
         if not self._context:
@@ -176,7 +185,10 @@ class BrowserSession:
         try:
             yield p
         finally:
-            await p.close()
+            try:
+                await p.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("page cleanup failed: %s", exc)
 
 
 @asynccontextmanager

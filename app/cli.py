@@ -105,6 +105,11 @@ def crawl(
         "-k",
         help="搜索关键词，可重复。不传则抓分类/列表",
     ),
+    category: str = typer.Option(
+        "",
+        "--category",
+        help="单平台分类（如大麦话剧歌剧、猫眼话剧音乐剧）；不传则抓全部分类",
+    ),
     max_pages: Optional[int] = typer.Option(
         None,
         "--max-pages",
@@ -171,13 +176,15 @@ def crawl(
         sources=_parse_sources(sources),
         cities=cities,
         keywords=keywords,
+        category=category.strip(),
         max_pages=pages,
     )
 
     pages_label = "全部" if pages <= 0 else str(pages)
     console.print(
         f"[bold]daxi crawl[/bold] sources={[s.value for s in job.sources]} "
-        f"cities={job.cities} keywords={job.keywords or '—'} pages={pages_label} "
+        f"cities={job.cities} category={job.category or '全部'} "
+        f"keywords={job.keywords or '—'} pages={pages_label} "
         f"headless={cfg.browser.headless}"
     )
 
@@ -188,6 +195,9 @@ def crawl(
     table.add_column("值")
     table.add_row("raw_count", str(result.raw_count))
     table.add_row("show_count", str(result.show_count))
+    table.add_row("ledger_visible_count", str(result.ledger_visible_count or 0))
+    table.add_row("ledger_hidden_count", str(result.ledger_hidden_count or 0))
+    table.add_row("ledger_hidden_by_category", str(result.ledger_hidden_by_category))
     table.add_row("by_source", str(result.by_source))
     table.add_row("errors", str(len(result.errors)))
     table.add_row("output", result.output_path)
