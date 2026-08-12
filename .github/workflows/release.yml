@@ -319,7 +319,7 @@ jobs:
           TAG: ${{ github.ref_name }}
           OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
           # 与下方 Upload to OSS 步骤保持一致
-          OSS_ENDPOINT: oss-cn-hangzhou.aliyuncs.com
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
@@ -384,7 +384,7 @@ jobs:
           OSS_KEY_ID: ${{ secrets.OSS_KEY_ID }}
           OSS_KEY_SECRET: ${{ secrets.OSS_KEY_SECRET }}
           OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
-          OSS_ENDPOINT: oss-cn-hangzhou.aliyuncs.com
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
         run: |
           set -euxo pipefail
           # 下载 ossutil（官方静态二进制，无需 apt）
