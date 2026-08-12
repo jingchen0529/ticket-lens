@@ -317,11 +317,15 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          # 与下方 Upload to OSS 步骤保持一致
+          OSS_ENDPOINT: oss-cn-hangzhou.aliyuncs.com
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          base_url="https://github.com/$REPO/releases/download/$TAG"
+          # updater 下载地址指向 OSS，客户无需访问 GitHub
+          base_url="https://${OSS_BUCKET}.${OSS_ENDPOINT}/releases"
 
           mac_url=""; mac_sig=""
           win_url=""; win_sig=""
@@ -373,3 +377,28 @@ jobs:
         run: |
           set -euxo pipefail
           gh release upload "$GITHUB_REF_NAME" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+
+      # 把 latest.json + updater 产物上传到阿里云 OSS，客户端无需访问 GitHub 即可更新。
+      - name: Upload to Aliyun OSS
+        env:
+          OSS_KEY_ID: ${{ secrets.OSS_KEY_ID }}
+          OSS_KEY_SECRET: ${{ secrets.OSS_KEY_SECRET }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: oss-cn-hangzhou.aliyuncs.com
+        run: |
+          set -euxo pipefail
+          # 下载 ossutil（官方静态二进制，无需 apt）
+          wget -q https://gosspublic.alicdn.com/ossutil/1.7.15/ossutil64 -O ossutil
+          chmod +x ossutil
+
+          # 上传 latest.json（每次发版覆盖，客户端 check() 始终拉到最新）
+          ./ossutil cp latest.json "oss://${OSS_BUCKET}/releases/latest.json" \
+            -e "$OSS_ENDPOINT" -i "$OSS_KEY_ID" -k "$OSS_KEY_SECRET" -f
+
+          # 上传 updater 产物（.app.tar.gz / -setup.exe）及其 .sig
+          for f in dl/*.app.tar.gz dl/*.app.tar.gz.sig dl/*-setup.exe dl/*-setup.exe.sig; do
+            [ -f "$f" ] || continue
+            ./ossutil cp "$f" "oss://${OSS_BUCKET}/releases/$(basename "$f")" \
+              -e "$OSS_ENDPOINT" -i "$OSS_KEY_ID" -k "$OSS_KEY_SECRET" -f
+            echo "uploaded: $(basename "$f")"
+          done
