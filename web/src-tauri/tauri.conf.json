@@ -69,7 +69,8 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5NzUzM0ZBMjU4NTMxNkQKUldSdE1ZVWwrak4xR1FQbnYzOEJxK0tOQTlPMWdxaUdXY0hENDdFczdXS2dFeExBN1ZVaTgzUzAK",
       "endpoints": [
-        "https://daolue-releases.oss-cn-beijing.aliyuncs.com/releases/latest.json"
+        "https://daolue.oss-cn-beijing.aliyuncs.com/releases/latest.json",
+        "https://github.com/jingchen0529/ticket-lens/releases/latest/download/latest.json"
       ]
     }
   }

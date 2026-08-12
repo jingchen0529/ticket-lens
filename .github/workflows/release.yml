@@ -149,19 +149,42 @@ jobs:
           workspaces: web/src-tauri
           key: ${{ matrix.label }}
 
-      # 把 tag 版本号写进 tauri.conf.json。否则安装包内建版本恒为 0.1.0，
-      # 装到客户机后每次都判定 latest.json 里的新版本更高 → 无限重复提示更新。
-      # 只在 tag 触发时改；手动 workflow_dispatch 保持原版本用于烟测。
-      - name: Stamp version from tag
+      # 把 tag 版本号和 CI 实际使用的 OSS bucket 一起写进 tauri.conf.json。
+      # 两者都必须来自本次发布配置：版本不一致会无限重复提示更新，bucket 不一致
+      # 则客户端会请求一个不存在的更新源（v1.0.14/v1.0.15 的失败原因）。
+      # 只在 tag 触发时改；手动 workflow_dispatch 保持源码配置用于烟测。
+      - name: Stamp release config from tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
+        env:
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           conf="web/src-tauri/tauri.conf.json"
-          node -e "const fs=require('fs');const p='$conf';const j=JSON.parse(fs.readFileSync(p));j.version='$version';fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');"
+          if ! [[ "$OSS_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]; then
+            echo "::error::OSS_BUCKET 缺失或不是合法的 OSS bucket 名"
+            exit 1
+          fi
+          updater_url="https://${OSS_BUCKET}.${OSS_ENDPOINT}/releases/latest.json"
+          RELEASE_CONF="$conf" RELEASE_VERSION="$version" UPDATER_URL="$updater_url" node -e '
+            const fs = require("fs");
+            const path = process.env.RELEASE_CONF;
+            const config = JSON.parse(fs.readFileSync(path, "utf8"));
+            const endpoints = config.plugins?.updater?.endpoints;
+            if (!Array.isArray(endpoints) || endpoints.length === 0) {
+              throw new Error("tauri.conf.json 缺少 updater endpoints");
+            }
+            config.version = process.env.RELEASE_VERSION;
+            config.plugins.updater.endpoints = [
+              process.env.UPDATER_URL,
+              ...endpoints.slice(1),
+            ];
+            fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+          '
           echo "stamped version: $version"
-          grep '"version"' "$conf"
+          echo "stamped updater endpoint: $updater_url"
 
       # tauri build 会顺带跑 npm run build（前端）并把 tauri.conf.json 的
       # resources（packaging/dist/daxi）打进安装包。
@@ -284,7 +307,8 @@ jobs:
             - **macOS (Apple Silicon)**: `Daolue-${{ github.ref_name }}-macos-aarch64.dmg`
             - **Linux (x86_64)**: `Daolue-${{ github.ref_name }}-linux-x86_64.deb` / `.AppImage`
 
-            > 已安装过的用户无需手动下载：应用会自动检查并更新到此版本。
+            > v1.0.14 / v1.0.15 内置了错误的 OSS 更新地址，这两个版本需手动安装
+            > 当前版本一次；安装后，后续版本即可在应用内自动更新。
             >
             > macOS 包未做 Apple 签名和公证，首次打开需右键 → 打开，或在
             > 「系统设置 → 隐私与安全性」中允许运行。
@@ -292,9 +316,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 发版后组装 updater 用的 latest.json 并上传到同一 Release。
-  # 客户端 endpoint 指向 releases/latest/download/latest.json，据此判定新版本、
-  # 校验 .sig 签名后下载。缺了这个 job，自动更新就没有可拉取的清单。
+  # 发版后分别组装 OSS / GitHub updater 清单并上传。客户端优先使用国内 OSS，
+  # GitHub Release 作为独立备用源；两个清单各自引用同源更新包。
   assemble-latest-json:
     name: Assemble latest.json
     needs: publish
@@ -324,52 +347,54 @@ jobs:
           set -euo pipefail
           VERSION="${TAG#v}"
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          # updater 下载地址指向 OSS，客户无需访问 GitHub
-          base_url="https://${OSS_BUCKET}.${OSS_ENDPOINT}/releases"
+          oss_base_url="https://${OSS_BUCKET}.${OSS_ENDPOINT}/releases"
+          github_base_url="https://github.com/${REPO}/releases/download/${TAG}"
 
-          mac_url=""; mac_sig=""
-          win_url=""; win_sig=""
+          mac_file=""; mac_sig=""
+          win_file=""; win_sig=""
           shopt -s nullglob
           for sig in dl/*.sig; do
             base=${sig%.sig}
             fname=$(basename "$base")
-            url="$base_url/$fname"
             sig_content=$(cat "$sig")
             case "$fname" in
-              *macos-aarch64.app.tar.gz) mac_url="$url"; mac_sig="$sig_content" ;;
-              *windows-x86_64.exe)       win_url="$url"; win_sig="$sig_content" ;;
+              *macos-aarch64.app.tar.gz) mac_file="$fname"; mac_sig="$sig_content" ;;
+              *windows-x86_64.exe)       win_file="$fname"; win_sig="$sig_content" ;;
             esac
           done
 
-          tmp_json=$(mktemp)
-          {
-            echo '{'
-            echo "  \"version\": \"$VERSION\","
-            echo "  \"notes\": \"Release $TAG\","
-            echo "  \"pub_date\": \"$PUB_DATE\","
-            echo '  "platforms": {'
-            first=1
-            if [ -n "$mac_url" ] && [ -n "$mac_sig" ]; then
-              [ $first -eq 0 ] && echo ','
-              printf '    "darwin-aarch64": {"signature": "%s", "url": "%s"}' "$mac_sig" "$mac_url"
-              first=0
-            fi
-            if [ -n "$win_url" ] && [ -n "$win_sig" ]; then
-              [ $first -eq 0 ] && echo ','
-              printf '    "windows-x86_64": {"signature": "%s", "url": "%s"}' "$win_sig" "$win_url"
-              first=0
-            fi
-            echo ''
-            echo '  }'
-            echo '}'
-          } > "$tmp_json"
-          echo "Generated latest.json:" && cat "$tmp_json"
-          # 至少要有一个平台，否则客户端拉到空清单
-          if [ "$first" -eq 1 ]; then
-            echo "::error::latest.json 没有任何平台条目——updater 产物或 .sig 缺失"
+          # 两个平台都应存在；缺一个也会让对应客户端在 check() 阶段失败。
+          if [ -z "$mac_file" ] || [ -z "$mac_sig" ] || \
+             [ -z "$win_file" ] || [ -z "$win_sig" ]; then
+            echo "::error::latest.json 平台条目不完整——updater 产物或 .sig 缺失"
             exit 1
           fi
-          mv "$tmp_json" latest.json
+
+          write_manifest() {
+            local base_url="$1"
+            local output="$2"
+            {
+              echo '{'
+              echo "  \"version\": \"$VERSION\","
+              echo "  \"notes\": \"Release $TAG\","
+              echo "  \"pub_date\": \"$PUB_DATE\","
+              echo '  "platforms": {'
+              printf '    "darwin-aarch64": {"signature": "%s", "url": "%s/%s"},\n' \
+                "$mac_sig" "$base_url" "$mac_file"
+              printf '    "windows-x86_64": {"signature": "%s", "url": "%s/%s"}\n' \
+                "$win_sig" "$base_url" "$win_file"
+              echo '  }'
+              echo '}'
+            } > "$output"
+          }
+
+          # 每个备用源都引用自身托管的更新包，OSS 整体不可用时 GitHub 才能真正兜底。
+          write_manifest "$github_base_url" latest.json
+          write_manifest "$oss_base_url" latest-oss.json
+          echo "Generated GitHub latest.json:"
+          cat latest.json
+          echo "Generated OSS latest.json:"
+          cat latest-oss.json
 
       - name: Upload latest.json to release
         env:
@@ -391,14 +416,57 @@ jobs:
           wget -q https://gosspublic.alicdn.com/ossutil/1.7.15/ossutil64 -O ossutil
           chmod +x ossutil
 
-          # 上传 latest.json（每次发版覆盖，客户端 check() 始终拉到最新）
-          ./ossutil cp latest.json "oss://${OSS_BUCKET}/releases/latest.json" \
+          # OSS 清单中的下载 URL 也指向 OSS；每次发版覆盖 latest.json。
+          ./ossutil cp latest-oss.json "oss://${OSS_BUCKET}/releases/latest.json" \
             -e "$OSS_ENDPOINT" -i "$OSS_KEY_ID" -k "$OSS_KEY_SECRET" -f
 
-          # 上传 updater 产物（.app.tar.gz / -setup.exe）及其 .sig
-          for f in dl/*.app.tar.gz dl/*.app.tar.gz.sig dl/*-setup.exe dl/*-setup.exe.sig; do
+          # 上传收集阶段重命名后的 updater 产物及其 .sig。Windows 原始文件虽是
+          # *-setup.exe，但此处 release asset 已统一为 *-windows-x86_64.exe。
+          for f in dl/*-macos-aarch64.app.tar.gz \
+                   dl/*-macos-aarch64.app.tar.gz.sig \
+                   dl/*-windows-x86_64.exe \
+                   dl/*-windows-x86_64.exe.sig; do
             [ -f "$f" ] || continue
             ./ossutil cp "$f" "oss://${OSS_BUCKET}/releases/$(basename "$f")" \
               -e "$OSS_ENDPOINT" -i "$OSS_KEY_ID" -k "$OSS_KEY_SECRET" -f
             echo "uploaded: $(basename "$f")"
           done
+
+      # 不只相信 ossutil 的上传退出码：从客户端实际访问的公网 URL 回读清单，
+      # 并逐个检查清单中的更新包，避免 endpoint/bucket/地域再次配错后仍发布成功。
+      - name: Verify public updater feed
+        env:
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          manifest_url="https://${OSS_BUCKET}.${OSS_ENDPOINT}/releases/latest.json"
+          curl --fail --silent --show-error --location \
+            --retry 5 --retry-all-errors --retry-delay 2 \
+            "$manifest_url" -o uploaded-latest.json
+          cmp latest-oss.json uploaded-latest.json
+
+          EXPECTED_ORIGIN="https://${OSS_BUCKET}.${OSS_ENDPOINT}" node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync("uploaded-latest.json", "utf8"));
+            const expectedVersion = process.env.RELEASE_VERSION.replace(/^v/, "");
+            if (manifest.version !== expectedVersion) {
+              throw new Error(`清单版本 ${manifest.version} 与 ${expectedVersion} 不一致`);
+            }
+            for (const platform of ["darwin-aarch64", "windows-x86_64"]) {
+              const entry = manifest.platforms?.[platform];
+              if (!entry?.url || !entry?.signature) {
+                throw new Error(`latest.json 缺少 ${platform} 的 URL 或签名`);
+              }
+              if (!entry.url.startsWith(`${process.env.EXPECTED_ORIGIN}/releases/`)) {
+                throw new Error(`${platform} 的下载地址与发布 OSS 不一致: ${entry.url}`);
+              }
+              process.stdout.write(entry.url + "\n");
+            }
+          ' > updater-urls.txt
+
+          while IFS= read -r url; do
+            curl --fail --silent --show-error --location --head \
+              --retry 5 --retry-all-errors --retry-delay 2 "$url"
+          done < updater-urls.txt
