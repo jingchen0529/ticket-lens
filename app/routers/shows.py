@@ -69,6 +69,7 @@ def list_shows(
     status: Optional[str] = None,
     perf_state: Optional[str] = Query(None, pattern="^(upcoming|ongoing|done|cancelled)$"),
     keyword: Optional[str] = None,
+    date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     sort_by: str = "start_time",
     descending: bool = False,
     limit: int = Query(50, ge=1, le=500),
@@ -84,6 +85,7 @@ def list_shows(
         status=status,
         perf_state=perf_state,
         keyword=keyword,
+        date=date,
         limit=limit,
         offset=offset,
     )
@@ -117,6 +119,7 @@ class ClearRequest(BaseModel):
     status: Optional[str] = None
     perf_state: Optional[str] = None
     keyword: Optional[str] = None
+    date: Optional[str] = None
 
 
 @router.post("/data/clear")
@@ -142,6 +145,7 @@ def clear_data(req: ClearRequest | None = None) -> dict:
         q = ShowQuery(
             source=req.source, city=req.city, category=req.category,
             status=req.status, perf_state=req.perf_state, keyword=req.keyword,
+            date=req.date,
         )
         deleted = repo.delete_shows(q)
     return {"success": True, "deleted": deleted}
@@ -156,6 +160,7 @@ def export(
     status: Optional[str] = None,
     perf_state: Optional[str] = Query(None, pattern="^(upcoming|ongoing|done|cancelled)$"),
     keyword: Optional[str] = None,
+    date: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     ids: Optional[str] = None,
 ) -> Response:
     repo = _repo()
@@ -165,7 +170,7 @@ def export(
     id_list = [i for i in ids.split(",") if i] if ids else None
     q = ShowQuery(
         source=source, city=city, category=category, status=status,
-        perf_state=perf_state, keyword=keyword,
+        perf_state=perf_state, keyword=keyword, date=date,
     )
     shows = repo.iter_for_export(q, ids=id_list)
 

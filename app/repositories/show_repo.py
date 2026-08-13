@@ -26,6 +26,7 @@ class ShowQuery:
     status: str | None = None
     perf_state: str | None = None  # 演出状态: upcoming/ongoing/done/cancelled
     keyword: str | None = None  # 标题模糊
+    date: str | None = None  # 采集日期（本地日历日 YYYY-MM-DD），按 crawled_at 过滤
     limit: int = 50
     offset: int = 0
 
@@ -135,6 +136,23 @@ class ShowRepository:
         if q.keyword:
             clauses.append("title LIKE ?")
             params.append(f"%{q.keyword}%")
+        # 采集日期过滤：把本地日历日换算成 UTC 起止后，按 crawled_at 区间比较。
+        # crawled_at 落库是 UTC，直接拿本地日期串比会在 CST 00:00-08:00 漏计当天数据。
+        if q.date:
+            try:
+                start_local = datetime.strptime(q.date, "%Y-%m-%d").astimezone()
+            except ValueError:
+                start_local = None
+            if start_local is not None:
+                start_utc = start_local.astimezone(UTC).replace(tzinfo=None).isoformat()
+                end_utc = (
+                    (start_local + timedelta(days=1))
+                    .astimezone(UTC)
+                    .replace(tzinfo=None)
+                    .isoformat()
+                )
+                clauses.append("crawled_at >= ? AND crawled_at < ?")
+                params.extend([start_utc, end_utc])
         # 排除不对外展示的大类（展览休闲 / 体育）；NULL 分类保留
         if _EXCLUDED_CATEGORIES:
             placeholders = ",".join("?" for _ in _EXCLUDED_CATEGORIES)

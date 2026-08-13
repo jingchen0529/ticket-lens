@@ -3,6 +3,8 @@ import { ref, reactive, computed, onMounted, onUnmounted, defineExpose } from 'v
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
+import { parseDate } from '@internationalized/date'
+import { CalendarDays } from 'lucide-vue-next'
 import { api, IN_TAURI } from '../api'
 
 // 引入 shadcn-ui 核心组件
@@ -11,6 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toast'
+import { Calendar } from '@/components/ui/calendar'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import { Field, FieldLabel, FieldDescription } from '@/components/ui/field'
 import {
@@ -64,13 +67,40 @@ const PERF_STATE_OPTIONS = [
   { value: 'cancelled', label: '取消' },
 ]
 
+function localDateString(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const todayString = localDateString()
+
 // 1. 筛选条件（仅保留后端真实支持的维度）
 const filters = reactive({
   keyword: '',
   source: 'all',
   city: 'all',
   category: 'all',
-  status: 'all'
+  status: 'all',
+  date: todayString,
+})
+
+const isDatePickerOpen = ref(false)
+const selectedDate = computed({
+  get: () => parseDate(filters.date || todayString),
+  set: (value) => {
+    if (!value) return
+    filters.date = value.toString()
+    isDatePickerOpen.value = false
+    doSearch()
+  },
+})
+
+const selectedDateLabel = computed(() => {
+  if (!filters.date) return '选择采集日期'
+  const [year, month, day] = filters.date.split('-')
+  return `${year}年${Number(month)}月${Number(day)}日`
 })
 
 function statusBadgeVariant(state) {
@@ -502,6 +532,7 @@ function buildQueryParams() {
   if (filters.city && filters.city !== 'all' && filters.city !== '全部') p.city = filters.city
   if (filters.category && filters.category !== 'all') p.category = filters.category
   if (filters.status && filters.status !== 'all') p.perf_state = filters.status
+  if (filters.date) p.date = filters.date
   return p
 }
 
@@ -540,6 +571,7 @@ function resetFilters() {
   filters.city = 'all'
   filters.category = 'all'
   filters.status = 'all'
+  filters.date = todayString
   page.value = 1
   fetchShows()
 }
@@ -733,6 +765,7 @@ async function executeClear(scope) {
     if (filters.city !== 'all') payload.city = filters.city
     if (filters.category !== 'all') payload.category = filters.category
     if (filters.status !== 'all') payload.perf_state = filters.status
+    if (filters.date) payload.date = filters.date
   }
 
   try {
@@ -764,6 +797,7 @@ async function executeExport(scope) {
     if (filters.city !== 'all') p.city = filters.city
     if (filters.category !== 'all') p.category = filters.category
     if (filters.status !== 'all') p.perf_state = filters.status
+    if (filters.date) p.date = filters.date
   }
 
   const url = api.exportUrl('xlsx', p)
@@ -780,7 +814,7 @@ async function executeExport(scope) {
 
   // Tauri 桌面壳：WebView 不支持网页下载，走系统保存对话框后写盘
   try {
-    const day = new Date().toISOString().slice(0, 10)
+    const day = filters.date || todayString
     const path = await save({
       title: '导出演出数据',
       defaultPath: `演出数据_${day}.xlsx`,
@@ -876,8 +910,37 @@ defineExpose({ refresh, fetchShows, loadFacets })
           </button>
         </div>
 
-        <!-- 右侧筛选与功能组 (搜索、城市、平台、分类、状态、筛选、重置、清除数据、列设置) -->
+        <!-- 右侧筛选与功能组 -->
         <div class="flex items-center gap-2 shrink-0 ml-auto">
+          <!-- 默认显示今日采集数据，可通过 shadcn-ui Calendar 切换日期 -->
+          <div class="shrink-0">
+            <Popover v-model:open="isDatePickerOpen">
+              <PopoverTrigger as-child>
+                <Button
+                  variant="outline"
+                  class="h-8 min-w-[150px] justify-start gap-2 rounded-xl border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 shadow-2xs hover:border-[var(--primary)] hover:bg-white"
+                >
+                  <CalendarDays class="h-3.5 w-3.5 text-[var(--primary)]" />
+                  <span>{{ selectedDateLabel }}</span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="start" :side-offset="4" class="w-auto p-0">
+                <Calendar v-model="selectedDate" />
+                <div class="flex items-center justify-between border-t border-slate-100 px-3 py-2">
+                  <span class="text-[11px] text-slate-400">按采集时间筛选</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-7 px-2 text-xs text-[var(--primary)] hover:bg-slate-50"
+                    @click="selectedDate = parseDate(todayString)"
+                  >
+                    回到今天
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
+
           <!-- 1. 关键词输入框 (搜索演出、艺人、场馆名称...) -->
           <div class="relative w-48 sm:w-56 shrink-0">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none z-10">
