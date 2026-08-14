@@ -23,6 +23,7 @@ from app.models import RawShowItem, SourcePlatform
 logger = logging.getLogger(__name__)
 
 ItemCallback = Callable[[RawShowItem], Awaitable[None] | None]
+ItemsCallback = Callable[[list[RawShowItem]], Awaitable[None] | None]
 
 
 class BaseCrawler(abc.ABC):
@@ -47,6 +48,7 @@ class BaseCrawler(abc.ABC):
         max_pages: int,
         category: str = "",
         on_item: ItemCallback | None = None,
+        on_items_discovered: ItemsCallback | None = None,
     ) -> list[RawShowItem]:
         """执行采集，返回平台原始条目。"""
 

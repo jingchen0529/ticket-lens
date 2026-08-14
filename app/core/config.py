@@ -88,6 +88,17 @@ class CrawlConfig(BaseModel):
     # 旧字段保留用于配置兼容；整项目重试已取消，失败后继续下一个项目。
     detail_project_attempts: int = Field(default=1, ge=1, le=5)
     detail_project_cooldown_seconds: float = Field(default=0.0, ge=0.0, le=600.0)
+    # detail.damai.cn/subpage 明确返回 bixi action=deny 时使用独立熔断，
+    # 不执行普通 2 秒三连，也不立即降级成移动端区间价。
+    detail_punish_cooldown_min_seconds: float = Field(default=105.0, ge=0.0, le=3600.0)
+    detail_punish_cooldown_max_seconds: float = Field(default=135.0, ge=0.0, le=3600.0)
+    detail_punish_retry_cooldown_min_seconds: float = Field(
+        default=240.0, ge=0.0, le=7200.0
+    )
+    detail_punish_retry_cooldown_max_seconds: float = Field(
+        default=360.0, ge=0.0, le=7200.0
+    )
+    detail_punish_max_cooldowns: int = Field(default=2, ge=0, le=5)
 
 
 class SourceEndpointConfig(BaseModel):

@@ -14,6 +14,7 @@ from app.crawlers.damai.mobile_detail import (
     MTOP_ITEM_DETAIL_API,
     mobile_detail_url,
     mtop_h5_sign,
+    parse_mobile_item_result,
 )
 
 
@@ -51,6 +52,18 @@ def test_mtop_h5_sign_matches_captured_mobile_request():
         "1786527823408",
         data,
     ) == "b5c591b4af9c3fa6f12b94668a0247e3"
+
+
+def test_mobile_result_rejects_wrong_item_id():
+    payload = _success_payload()
+    result = json.loads(payload["data"]["result"])
+    result["detailViewComponentMap"]["item"]["staticData"]["itemBase"][
+        "itemId"
+    ] = "1056876653291"
+    payload["data"]["result"] = json.dumps(result, ensure_ascii=False)
+
+    with pytest.raises(MobileDetailError, match="项目编号不匹配"):
+        parse_mobile_item_result(payload, ITEM_ID)
 
 
 @pytest.mark.asyncio

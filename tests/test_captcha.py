@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.browser.captcha import base as captcha_base
-from app.browser.captcha.base import CaptchaChallenge, CaptchaKind
+from app.browser.captcha.base import CaptchaChallenge, CaptchaKind, CaptchaSolveResult
 from app.browser.captcha.human_track import distance_candidates, generate_slider_track
 from app.core.config import (
     AppConfig,
@@ -121,6 +121,7 @@ async def test_manual_solver_publishes_and_clears_intervention_status(monkeypatc
         )
     )
     solver.provider = SimpleNamespace(name="bingtop")
+    solver._confirm_cleared = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
     result = await solver.solve_manual(
         object(),
@@ -131,7 +132,54 @@ async def test_manual_solver_publishes_and_clears_intervention_status(monkeypatc
     record.set_manual_captcha.assert_called_once()
     assert "连续 3 次" in record.set_manual_captcha.call_args.kwargs["reason"]
     assert record.set_manual_captcha.call_args.kwargs["provider"] == "bingtop"
+    solver._confirm_cleared.assert_awaited_once()  # type: ignore[attr-defined]
     record.clear_manual_captcha.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://search.damai.cn/search.htm", True),
+        ("https://detail.damai.cn/item.htm?id=1", True),
+        ("https://login.taobao.com/member/login.jhtml", False),
+        ("https://damai.cn.evil.example/", False),
+    ],
+)
+async def test_damai_captcha_success_requires_damai_domain(url, expected):
+    solver = DamaiCaptchaSolver(AppConfig())
+    solver.detect = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    page = SimpleNamespace(url=url)
+    result = CaptchaSolveResult(ok=True, method="manual", message="cleared")
+
+    assert await solver._confirm_cleared(page, result) is expected
+
+
+@pytest.mark.asyncio
+async def test_damai_no_captcha_on_taobao_is_not_skipped_as_success():
+    solver = DamaiCaptchaSolver(AppConfig())
+    solver.detect = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    page = SimpleNamespace(url="https://www.taobao.com/")
+
+    result = await solver.ensure_cleared(page)
+
+    assert result.ok is False
+    assert result.method == "unexpected_page"
+    solver.detect.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_damai_manual_captcha_aborts_immediately_after_cross_domain_navigation():
+    solver = DamaiCaptchaSolver(AppConfig())
+    page = SimpleNamespace(url="https://login.taobao.com/member/login.jhtml")
+
+    result = await solver.solve_manual(
+        page,
+        CaptchaChallenge(kind=CaptchaKind.SLIDER),
+    )
+
+    assert result.ok is False
+    assert result.method == "unexpected_page"
 
 
 @pytest.mark.asyncio

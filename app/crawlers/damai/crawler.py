@@ -9,18 +9,20 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
 from datetime import datetime
 from typing import Any, Sequence
-from urllib.parse import quote, urlencode, urljoin
+from urllib.parse import quote, urlencode, urljoin, urlparse
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from app.browser.captcha.base import CaptchaSolver
-from app.crawlers.base import BaseCrawler, ItemCallback
+from app.core import paths
+from app.crawlers.base import BaseCrawler, ItemCallback, ItemsCallback
 from app.crawlers.damai.captcha import DamaiCaptchaSolver
 from app.crawlers.damai.detail import DAMAI_DESKTOP_UA, enrich_items_detail
 from app.crawlers.damai.fruit_slider import CaptchaPayload, attach_payload_listener
@@ -78,6 +80,7 @@ class DamaiCrawler(BaseCrawler):
         max_pages: int,
         category: str = "",
         on_item: ItemCallback | None = None,
+        on_items_discovered: ItemsCallback | None = None,
     ) -> list[RawShowItem]:
         items: list[RawShowItem] = []
         seen_projects: set[str] = set()
@@ -110,6 +113,10 @@ class DamaiCrawler(BaseCrawler):
 
             # 列表完成后：用同一浏览器上下文拉 subpage，补全场次/票档/场馆
             if items and self._should_enrich_detail():
+                if on_items_discovered is not None:
+                    discovered_result = on_items_discovered(items)
+                    if inspect.isawaitable(discovered_result):
+                        await discovered_result
                 self.log.info("damai detail enrich start count=%s", len(items))
                 raw_delay = getattr(self.config.crawl, "detail_delay_seconds", 1.5)
                 delay = float(raw_delay) if raw_delay is not None else 1.5
@@ -137,6 +144,41 @@ class DamaiCrawler(BaseCrawler):
                     if raw_max_retry_backoff is not None
                     else 2.0
                 )
+                punish_cooldown_min = float(
+                    getattr(
+                        self.config.crawl,
+                        "detail_punish_cooldown_min_seconds",
+                        105.0,
+                    )
+                )
+                punish_cooldown_max = float(
+                    getattr(
+                        self.config.crawl,
+                        "detail_punish_cooldown_max_seconds",
+                        135.0,
+                    )
+                )
+                punish_retry_cooldown_min = float(
+                    getattr(
+                        self.config.crawl,
+                        "detail_punish_retry_cooldown_min_seconds",
+                        240.0,
+                    )
+                )
+                punish_retry_cooldown_max = float(
+                    getattr(
+                        self.config.crawl,
+                        "detail_punish_retry_cooldown_max_seconds",
+                        360.0,
+                    )
+                )
+                punish_max_cooldowns = int(
+                    getattr(
+                        self.config.crawl,
+                        "detail_punish_max_cooldowns",
+                        2,
+                    )
+                )
                 items = await enrich_items_detail(
                     page,
                     items,
@@ -146,6 +188,12 @@ class DamaiCrawler(BaseCrawler):
                     request_attempts=retry_attempts,
                     retry_delay_s=retry_delay,
                     max_retry_delay_s=max_retry_backoff,
+                    punish_cooldown_min_s=punish_cooldown_min,
+                    punish_cooldown_max_s=punish_cooldown_max,
+                    punish_retry_cooldown_min_s=punish_retry_cooldown_min,
+                    punish_retry_cooldown_max_s=punish_retry_cooldown_max,
+                    punish_max_cooldowns=punish_max_cooldowns,
+                    checkpoint_path=paths.data_dir() / "damai_detail_checkpoint.json",
                     on_item=on_item,
                 )
                 self.log.info(
@@ -195,6 +243,29 @@ class DamaiCrawler(BaseCrawler):
             and hasattr(self.session, "save_platform_cookies")
         ):
             await self.session.save_platform_cookies(self.source.value)
+
+    @staticmethod
+    def _page_host(page: Page) -> str:
+        try:
+            return str(urlparse(str(page.url or "")).hostname or "").lower()
+        except ValueError:
+            return ""
+
+    @classmethod
+    def _is_search_page(cls, page: Page) -> bool:
+        current_url = str(page.url or "").lower()
+        return cls._page_host(page) == "search.damai.cn" and not any(
+            marker in current_url for marker in ("punish", "_____tmd_____")
+        )
+
+    async def _return_to_search(self, page: Page, entry: str) -> None:
+        """重新进入搜索页，并校验导航最终没有再次落到风控或跨域页面。"""
+        await self.goto(page, entry, wait_until="domcontentloaded")
+        await page.wait_for_timeout(800)
+        if not self._is_search_page(page):
+            raise RuntimeError(
+                f"unexpected destination after search recovery: {page.url}"
+            )
 
     def _latest_early_payload(self) -> CaptchaPayload | None:
         early = getattr(self, "_early_payloads", None) or []
@@ -267,6 +338,11 @@ class DamaiCrawler(BaseCrawler):
                     f"damai search.htm navigation failed city={city} keyword={keyword!r}: "
                     f"{retry_exc}"
                 ) from retry_exc
+        if not self._is_search_page(page):
+            raise RuntimeError(
+                f"damai search.htm reached unexpected destination city={city} "
+                f"keyword={keyword!r}: {page.url}"
+            )
         await page.wait_for_timeout(1200)
 
         captcha_retries = 0
@@ -324,10 +400,29 @@ class DamaiCrawler(BaseCrawler):
                     try:
                         await self.goto(page, punish, wait_until="domcontentloaded")
                     except Exception as exc:  # noqa: BLE001
-                        raise RuntimeError(
-                            f"damai captcha navigation/solve failed city={city} "
-                            f"keyword={keyword!r} page={page_no}: {exc}"
-                        ) from exc
+                        # 阿里安全链路偶尔会把 punish 导向淘宝。跨域页绝不能
+                        # 进入人工验证；尝试一次干净的 search 入口恢复后重放当前页。
+                        host = self._page_host(page)
+                        if host == "damai.cn" or host.endswith(".damai.cn"):
+                            raise RuntimeError(
+                                f"damai captcha navigation/solve failed city={city} "
+                                f"keyword={keyword!r} page={page_no}: {exc}"
+                            ) from exc
+                        try:
+                            await self._return_to_search(page, entry)
+                        except Exception as recovery_exc:  # noqa: BLE001
+                            raise RuntimeError(
+                                f"damai captcha left platform and search recovery failed "
+                                f"city={city} keyword={keyword!r} page={page_no}: "
+                                f"captcha={exc}; recovery={recovery_exc}"
+                            ) from recovery_exc
+                        self.log.warning(
+                            "damai captcha cross-domain navigation recovered city=%s "
+                            "kw=%r page=%s",
+                            city,
+                            keyword,
+                            page_no,
+                        )
                 else:
                     try:
                         cleared = await self._maybe_solve_captcha(page)
@@ -341,12 +436,11 @@ class DamaiCrawler(BaseCrawler):
                             f"damai captcha solver failed city={city} keyword={keyword!r} "
                             f"page={page_no}"
                         )
-                # 过验证后不要先浪费额度回第 1 页；直接重试当前 page_no
-                # 若当前仍在 punish 页，回到 search 域（仍请求目标页）
-                if "punish" in (page.url or "") or "_____tmd_____" in (page.url or ""):
+                # 过验证后显式回到 search 域，再直接重试当前 page_no。
+                # 不能只看 punish 字样，否则淘宝/登录等异常导航会污染后续请求。
+                if not self._is_search_page(page):
                     try:
-                        await page.goto(entry, wait_until="domcontentloaded")
-                        await page.wait_for_timeout(800)
+                        await self._return_to_search(page, entry)
                     except Exception as exc:  # noqa: BLE001
                         raise RuntimeError(
                             f"damai failed to return to search page city={city} "

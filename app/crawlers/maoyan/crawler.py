@@ -19,7 +19,7 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from app.browser.captcha.base import CaptchaSolver
-from app.crawlers.base import BaseCrawler, ItemCallback
+from app.crawlers.base import BaseCrawler, ItemCallback, ItemsCallback
 from app.crawlers.maoyan.captcha import MaoyanCaptchaSolver
 from app.models import RawShowItem, SourcePlatform
 from app.utils.text import clean_text
@@ -79,7 +79,9 @@ class MaoyanCrawler(BaseCrawler):
         max_pages: int,
         category: str = "",
         on_item: ItemCallback | None = None,
+        on_items_discovered: ItemsCallback | None = None,
     ) -> list[RawShowItem]:
+        _ = on_items_discovered
         items: list[RawShowItem] = []
         seen_projects: set[str] = set()
         kw_list = list(keywords) if keywords else [""]

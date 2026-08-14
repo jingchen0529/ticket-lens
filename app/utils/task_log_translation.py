@@ -216,6 +216,14 @@ def translate_task_log(
             f"{_platform(match[1])}项目已入库：项目编号 {match[2]}，"
             f"场次 {match[3]} 个，数据 {match[4]} 条"
         )
+    match = re.fullmatch(
+        r"source (\w+) list checkpoint persisted projects=(\d+)", raw, re.I
+    )
+    if match:
+        return (
+            f"{_platform(match[1])}列表已保存断点：项目 {match[2]} 个，"
+            "详情中断后可重新补跑"
+        )
     match = re.fullmatch(r"source (\w+) raw=(\d+)", raw, re.I)
     if match:
         return f"{_platform(match[1])}原始数据采集完成：{match[2]} 条"
@@ -306,13 +314,40 @@ def translate_task_log(
     if match:
         return f"正在处理大麦网详情：{match[1]}/{match[2]}，项目编号 {match[3]}"
     match = re.fullmatch(
-        r"damai mobile detail fallback item=(\S+) url=(\S+) reason=.*",
+        r"damai pc price absent item=(\S+) sessions=(\d+) "
+        r"explicit_ticket_sessions=(\d+)",
         raw,
-        re.I | re.S,
+        re.I,
     )
     if match:
         return (
-            f"PC 详情不可用，已切换大麦移动端：项目编号 {match[1]}，"
+            f"大麦 PC 详情已完整返回但未显示价格：项目编号 {match[1]}，"
+            f"场次 {match[2]} 个；将使用移动端补全价格"
+        )
+    match = re.fullmatch(
+        r"damai pc app only item=(\S+) buy_status=(\S+) buy_origin=(\S+)",
+        raw,
+        re.I,
+    )
+    if match:
+        return (
+            "大麦 PC 项目页可正常访问，但当前渠道仅支持大麦 App 购买："
+            f"项目编号 {match[1]}；将使用移动端补全场次和价格"
+        )
+    match = re.fullmatch(
+        r"damai mobile detail fallback item=(\S+) url=(\S+) reason=(\S+)",
+        raw,
+        re.I,
+    )
+    if match:
+        if match[3].lower() == "pc_app_only":
+            return (
+                "PC 项目明确仅支持大麦 App 购买，已使用移动端补全："
+                f"项目编号 {match[1]}，地址 {match[2]}"
+            )
+        return (
+            "PC 详情已正常返回但未显示价格，已使用大麦移动端补全："
+            f"项目编号 {match[1]}，"
             f"地址 {match[2]}"
         )
     match = re.fullmatch(
@@ -360,6 +395,36 @@ def translate_task_log(
     if match:
         return f"大麦网详情获取失败，已跳过项目 {match[1]} 并继续下一个"
     match = re.fullmatch(
+        r"damai pc detail skipped item=(\S+) reason=.*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return (
+            "大麦 PC 详情业务数据不完整，未切换移动端，"
+            f"已跳过项目 {match[1]} 并继续下一个"
+        )
+    match = re.fullmatch(
+        r"damai pc detail batch suspended item=(\S+) progress=(\d+)/(\d+) reason=.*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return (
+            f"大麦 PC 详情通道暂未恢复，已暂停本批详情：项目编号 {match[1]}，"
+            f"进度 {match[2]}/{match[3]}；未切换移动端，可从断点补跑"
+        )
+    match = re.fullmatch(
+        r"damai item static skipped item=(\S+) price_confirmed=true reason=(\S+)",
+        raw,
+        re.I,
+    )
+    if match:
+        return (
+            f"大麦 PC 票价已获取，项目编号 {match[1]}；"
+            "项目介绍暂不可用，继续保留 PC 详情"
+        )
+    match = re.fullmatch(
         r"damai detail batch done success=(\d+) skipped=(\d+) total=(\d+)",
         raw,
         re.I,
@@ -396,6 +461,51 @@ def translate_task_log(
             f"场馆 {_value(match[2], '未提供')}，场次 {match[4]} 个"
         )
 
+    match = re.fullmatch(
+        r"subpage pc unavailable item=(\S+) dataType=(\S+) dataId=(\S+) "
+        r"reason=(\S+) status=(\S+) content_type=(\S+) chars=(\d+)",
+        raw,
+        re.I,
+    )
+    if match:
+        return (
+            f"大麦 PC 详情通道暂时受限：项目编号 {match[1]}，"
+            f"子项类型 {match[2]}，网络状态码 {match[5]}；"
+            "系统将重试原请求，不切换移动端"
+        )
+    match = re.fullmatch(
+        r"item\.htm pc unavailable item=(\S+) reason=(\S+) status=(\S+) "
+        r"content_type=(\S+) chars=(\d+)",
+        raw,
+        re.I,
+    )
+    if match:
+        return (
+            f"大麦 PC 项目页暂时受限：项目编号 {match[1]}，"
+            f"网络状态码 {match[3]}；系统将重试原请求，不切换移动端"
+        )
+    match = re.fullmatch(
+        r"item\.htm pc retry scheduled item=(\S+) reason=(\S+) "
+        r"attempt=(\d+)/(\d+) retry_in=([\d.]+)s",
+        raw,
+        re.I,
+    )
+    if match:
+        return (
+            f"大麦 PC 项目页自动重试：项目编号 {match[1]}，"
+            f"第 {match[3]}/{match[4]} 次，等待 {match[5]} 秒；不切换移动端"
+        )
+    match = re.fullmatch(
+        r"item\.htm pc semantic failure item=(\S+) reason=(\S+) "
+        r"status=(\S+) chars=(\d+)",
+        raw,
+        re.I,
+    )
+    if match:
+        return (
+            f"大麦 PC 项目页返回错误页面：项目编号 {match[1]}，"
+            "未切换移动端，将跳过该项目"
+        )
     match = re.fullmatch(r"subpage http (\d+) item=(\S+) dataId=(\S+)", raw, re.I)
     if match:
         return (
@@ -424,6 +534,78 @@ def translate_task_log(
         return (
             f"详情子请求响应格式暂不可用，项目编号 {match[1]}，"
             "将自动重试"
+        )
+    match = re.fullmatch(
+        r"subpage bixi punish item=(\S+) dataType=(\S+) dataId=(\S+).*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return (
+            f"大麦 PC 详情触发临时风控：项目编号 {match[1]}，"
+            f"子项类型 {match[2]}，子项编号 {match[3]}；已停止快速重试"
+        )
+    match = re.fullmatch(
+        r"damai pc circuit open item=(\S+) label=(\S+).*round=(\d+)/(\d+) "
+        r"cooldown=([\d.]+)s resume_at=(\S+) checkpoint_saved=(true|false) "
+        r"trigger=(\S+)",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        suffix = "" if match[7].lower() == "true" else "；断点保存失败"
+        channel_state = "风控" if match[8].lower() == "bixi" else "通道异常"
+        return (
+            f"大麦 PC 详情{channel_state}冷却：项目编号 {match[1]}，"
+            f"子项 {_detail_label(match[2])}，第 {match[3]}/{match[4]} 轮，"
+            f"暂停 {match[5]} 秒后重试原请求{suffix}"
+        )
+    match = re.fullmatch(
+        r"damai pc circuit probe invalid item=(\S+) label=(\S+).*response=(\S+)",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return (
+            f"大麦 PC 详情冷却后的原请求仍未恢复：项目编号 {match[1]}，"
+            f"子项 {_detail_label(match[2])}；将进入下一轮长冷却"
+        )
+    match = re.fullmatch(
+        r"damai pc circuit probe item=(\S+) label=(\S+).*round=(\d+)",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return (
+            f"大麦 PC 详情冷却结束，正在重试原请求：项目编号 {match[1]}，"
+            f"子项 {_detail_label(match[2])}"
+        )
+    match = re.fullmatch(
+        r"damai pc circuit closed item=(\S+) label=(\S+) recovered_round=(\d+)",
+        raw,
+        re.I,
+    )
+    if match:
+        return (
+            f"大麦 PC 详情通道已恢复：项目编号 {match[1]}，"
+            f"继续采集 {_detail_label(match[2])}"
+        )
+    match = re.fullmatch(
+        r"damai pc circuit exhausted item=(\S+) label=(\S+).*"
+        r"checkpoint_saved=(true|false).*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        checkpoint_text = (
+            "已保存待处理列表"
+            if match[3].lower() == "true"
+            else "断点保存失败"
+        )
+        return (
+            f"大麦 PC 详情通道恢复失败，{checkpoint_text}并停止本批详情："
+            f"项目编号 {match[1]}，子项 {_detail_label(match[2])}；"
+            "需要重新发起详情补跑"
         )
     match = re.fullmatch(r"subpage response fail item=(\S+) code=(\S+)", raw, re.I)
     if match:
@@ -461,7 +643,7 @@ def translate_task_log(
     if match:
         return (
             f"详情子项重试已耗尽，项目编号 {match[1]}，"
-            f"子项 {_detail_label(match[2])}，将切换大麦移动端详情"
+            f"子项 {_detail_label(match[2])}；未切换移动端"
         )
     match = re.fullmatch(
         r"damai detail project retry item=(\S+) attempt=(\d+)/(\d+) "

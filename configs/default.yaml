@@ -37,9 +37,16 @@ crawl:
   detail_retry_attempts: 3
   detail_retry_delay_seconds: 2
   detail_retry_max_backoff_seconds: 2
-  # 整项目不再冷却重跑；PC 失败转移动端，仍失败则继续下一个项目。
+  # 整项目不再冷却重跑；只有 PC 完整但无价格才允许移动端补全。
   detail_project_attempts: 1
   detail_project_cooldown_seconds: 0
+  # 历史实测 PC 临时风控约 90～100 秒恢复：首轮留出安全余量后重放原请求；
+  # 第二次使用 4～6 分钟冷却；再次命中则保存断点并停止本批详情。
+  detail_punish_cooldown_min_seconds: 105
+  detail_punish_cooldown_max_seconds: 135
+  detail_punish_retry_cooldown_min_seconds: 240
+  detail_punish_retry_cooldown_max_seconds: 360
+  detail_punish_max_cooldowns: 2
 pipeline:
   dedupe: true
   drop_invalid: true

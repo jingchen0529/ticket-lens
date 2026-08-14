@@ -65,6 +65,12 @@ class CaptchaSolver(abc.ABC):
 
     async def solve_manual(self, page: Page, challenge: CaptchaChallenge) -> CaptchaSolveResult:
         """有头模式下等待人工完成。"""
+        if not self._is_expected_page(page):
+            return CaptchaSolveResult(
+                ok=False,
+                method="unexpected_page",
+                message=f"unexpected page before manual captcha: {page.url}",
+            )
         captcha_cfg = self._captcha_cfg()
         wait_s = getattr(captcha_cfg, "manual_wait_seconds", 120)
         if getattr(self._browser_cfg(), "headless", True):
@@ -105,8 +111,19 @@ class CaptchaSolver(abc.ABC):
             deadline = asyncio.get_event_loop().time() + wait_s
             while asyncio.get_event_loop().time() < deadline:
                 await asyncio.sleep(1.5)
-                if await self.detect(page) is None:
-                    return CaptchaSolveResult(ok=True, method="manual", message="manual cleared")
+                if not self._is_expected_page(page):
+                    return CaptchaSolveResult(
+                        ok=False,
+                        method="unexpected_page",
+                        message=f"unexpected page during manual captcha: {page.url}",
+                    )
+                result = CaptchaSolveResult(
+                    ok=True,
+                    method="manual",
+                    message="manual cleared",
+                )
+                if await self._confirm_cleared(page, result):
+                    return result
             return CaptchaSolveResult(ok=False, method="manual", message="manual wait timeout")
         finally:
             if active_job:
@@ -114,7 +131,11 @@ class CaptchaSolver(abc.ABC):
 
     async def _confirm_cleared(self, page: Page, result: CaptchaSolveResult) -> bool:
         """二次确认自动求解结果；平台可按自己的可见 UI 语义覆盖。"""
-        return await self.detect(page) is None
+        return self._is_expected_page(page) and await self.detect(page) is None
+
+    def _is_expected_page(self, page: Page) -> bool:
+        """当前页是否仍属于平台业务域；平台可覆盖。"""
+        return True
 
     async def ensure_cleared(
         self,
@@ -133,6 +154,12 @@ class CaptchaSolver(abc.ABC):
             self._payload_hint = payload_hint
         else:
             self._payload_hint = None
+        if not self._is_expected_page(page):
+            return CaptchaSolveResult(
+                ok=False,
+                method="unexpected_page",
+                message=f"unexpected page before captcha detection: {page.url}",
+            )
         challenge = await self.detect(page)
         if challenge is None:
             return CaptchaSolveResult(ok=True, method="skipped", message="no captcha")

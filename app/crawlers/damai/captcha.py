@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 from playwright.async_api import Page
 
@@ -185,7 +186,7 @@ class DamaiCaptchaSolver(CaptchaSolver):
         payload_hint: Any = None,
     ) -> CaptchaSolveResult:
         async def cleared() -> bool:
-            return await self.detect(page) is None
+            return self._is_expected_page(page) and await self.detect(page) is None
 
         # 等 UI 就绪（punish 页异步加载 scratch-captcha）
         fruitish = bool(challenge.meta.get("fruit")) or challenge.kind in (
@@ -257,9 +258,18 @@ class DamaiCaptchaSolver(CaptchaSolver):
         )
 
     async def _confirm_cleared(self, page: Page, result: CaptchaSolveResult) -> bool:
+        if not self._is_expected_page(page):
+            return False
         if result.method.startswith("fruit_slider"):
             return not await detect_fruit_slider(page)
         return await super()._confirm_cleared(page, result)
+
+    def _is_expected_page(self, page: Page) -> bool:
+        try:
+            host = str(urlparse(str(page.url or "")).hostname or "").lower()
+        except ValueError:
+            return False
+        return host == "damai.cn" or host.endswith(".damai.cn")
 
     async def _drag_in_frames(self, page: Page, cleared) -> bool:
         from app.browser.captcha.human_track import distance_candidates, generate_slider_track

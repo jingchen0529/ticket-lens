@@ -287,6 +287,61 @@ async def test_damai_punish_navigation_does_not_solve_twice():
 
 
 @pytest.mark.asyncio
+async def test_damai_search_recovery_rejects_a_second_cross_domain_redirect():
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+    crawler.goto = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    page = SimpleNamespace(
+        url="https://login.taobao.com/member/login.jhtml",
+        wait_for_timeout=AsyncMock(),
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected destination after search recovery"):
+        await crawler._return_to_search(
+            page,
+            "https://search.damai.cn/search.htm?cty=北京",
+        )
+
+
+@pytest.mark.asyncio
+async def test_damai_cross_domain_punish_recovers_to_search_and_replays_current_page():
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+    page = SimpleNamespace(
+        url="https://search.damai.cn/search.htm",
+        wait_for_timeout=AsyncMock(),
+    )
+
+    async def fake_goto(_page, url, **_kwargs):
+        if "punish" in url:
+            page.url = "https://login.taobao.com/member/login.jhtml"
+            raise RuntimeError("unexpected_page")
+        page.url = "https://search.damai.cn/search.htm"
+
+    crawler.goto = AsyncMock(side_effect=fake_goto)  # type: ignore[method-assign]
+    crawler._fetch_search_ajax = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            {
+                "ret": ["FAIL_SYS_USER_VALIDATE"],
+                "data": {"url": "https://risk.damai.cn/punish?x=1"},
+            },
+            {
+                "pageData": {
+                    "totalPage": 1,
+                    "resultData": [
+                        {"projectid": "recovered", "nameNoHtml": "恢复后的项目"}
+                    ],
+                }
+            },
+        ]
+    )
+
+    items = await crawler._crawl_city_keyword(page, "北京", "", 1)
+
+    assert [item.source_id for item in items] == ["recovered"]
+    assert crawler.goto.await_count == 3
+    assert page.url.startswith("https://search.damai.cn/")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("response_or_error", "message"),
     [
@@ -432,17 +487,34 @@ async def test_damai_deduplicates_projects_before_detail_fetch(monkeypatch):
         side_effect=[[first], [duplicate]]
     )
 
-    async def fake_enrich(_page, items, **_kwargs):
+    events: list[str] = []
+
+    async def on_items_discovered(items):
+        events.append(f"checkpoint:{','.join(item.source_id for item in items)}")
+
+    async def fake_enrich(_page, items, **kwargs):
+        events.append("detail")
         assert [item.source_id for item in items] == ["same"]
+        assert kwargs["punish_cooldown_min_s"] == 105
+        assert kwargs["punish_cooldown_max_s"] == 135
+        assert kwargs["punish_max_cooldowns"] == 2
+        assert str(kwargs["checkpoint_path"]).endswith(
+            "data/damai_detail_checkpoint.json"
+        )
         return items
 
     monkeypatch.setattr(crawler_module, "enrich_items_detail", fake_enrich)
 
     items = await crawler.crawl(
-        cities=["上海", "北京"], keywords=[], max_pages=1, category="音乐会"
+        cities=["上海", "北京"],
+        keywords=[],
+        max_pages=1,
+        category="音乐会",
+        on_items_discovered=on_items_discovered,
     )
 
     assert [item.source_id for item in items] == ["same"]
+    assert events == ["checkpoint:same", "detail"]
     assert [call.args[4] for call in crawler._crawl_city_keyword.await_args_list] == [
         "音乐会",
         "音乐会",

@@ -18,6 +18,12 @@ from app.core.config import BrowserConfig, CaptchaConfig
 logger = logging.getLogger(__name__)
 
 
+def _storage_allowed_domains(platform: str | None) -> tuple[str, ...] | None:
+    if str(platform or "").strip().lower() == "damai":
+        return ("damai.cn",)
+    return None
+
+
 class BrowserSession:
     """管理 Playwright 生命周期。"""
 
@@ -63,7 +69,10 @@ class BrowserSession:
         # 按平台加载已通过验证的 cookie
         if platform and self.captcha_config.persist_cookies:
             path = cookie_path(self.captcha_config.cookie_dir, platform)
-            state = await load_storage_state(path)
+            state = await load_storage_state(
+                path,
+                allowed_domains=_storage_allowed_domains(platform),
+            )
             if state:
                 context_kwargs["storage_state"] = state
                 self._storage_loaded_for.add(platform)
@@ -169,7 +178,11 @@ class BrowserSession:
                 and self._context is not None
             ):
                 path = cookie_path(self.captcha_config.cookie_dir, captcha.platform)
-                await save_storage_state(self._context, path)
+                await save_storage_state(
+                    self._context,
+                    path,
+                    allowed_domains=_storage_allowed_domains(captcha.platform),
+                )
 
     async def save_platform_cookies(self, platform: str) -> None:
         if self._context is None:
@@ -177,7 +190,11 @@ class BrowserSession:
         if not self.captcha_config.persist_cookies:
             return
         path = cookie_path(self.captcha_config.cookie_dir, platform)
-        await save_storage_state(self._context, path)
+        await save_storage_state(
+            self._context,
+            path,
+            allowed_domains=_storage_allowed_domains(platform),
+        )
 
     @asynccontextmanager
     async def page(self) -> AsyncIterator[Page]:
