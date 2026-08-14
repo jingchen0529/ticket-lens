@@ -70,6 +70,8 @@ pw-browsers/
 /artifacts/
 /js_reverse_cache/
 
+/reports/
+
 移动端.md
 BUILD.md
 CHANGELOG.md

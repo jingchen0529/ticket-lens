@@ -14,7 +14,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['update-theme'])
+const emit = defineEmits(['update-theme', 'update-detected'])
 
 // 当前选中的设置 Tab ('all' | 'bingtuo' | 'captcha' | 'theme' | 'update')
 const activeTab = ref('all')
@@ -178,17 +178,18 @@ const updateError = ref('')
 const updateSectionRef = ref(null)
 let pendingUpdate = null
 
-async function handleCheckUpdate() {
+async function handleCheckUpdate({ showError = false } = {}) {
   if (updateState.value === 'checking' || updateState.value === 'downloading') return
   updateState.value = 'checking'
   updateError.value = ''
   try {
-    const update = await checkForUpdate({ showError: true })
+    const update = await checkForUpdate({ showError })
     if (update) {
       pendingUpdate = update
       updateVersion.value = update.version || ''
       updateNotes.value = update.body || ''
       updateState.value = 'available'
+      emit('update-detected', update)
     } else {
       updateState.value = 'uptodate'
     }
@@ -225,7 +226,14 @@ async function openUpdatePanel(detectedUpdate = null) {
   await nextTick()
   updateSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   if (['idle', 'uptodate', 'error'].includes(updateState.value)) {
-    await handleCheckUpdate()
+    await handleCheckUpdate({ showError: true })
+  }
+}
+
+function onTabActive() {
+  loadSettings()
+  if (updateState.value !== 'downloading') {
+    handleCheckUpdate({ showError: false })
   }
 }
 
@@ -234,9 +242,20 @@ watch([bingtuoUser, bingtuoPass], () => {
   balanceError.value = ''
 })
 
-onMounted(loadSettings)
+watch(activeTab, (newTab) => {
+  if (newTab === 'update' && updateState.value !== 'downloading') {
+    handleCheckUpdate({ showError: false })
+  }
+})
 
-defineExpose({ openUpdatePanel })
+onMounted(() => {
+  loadSettings()
+  if (updateState.value !== 'downloading') {
+    handleCheckUpdate({ showError: false })
+  }
+})
+
+defineExpose({ openUpdatePanel, onTabActive, handleCheckUpdate })
 </script>
 
 <template>
@@ -569,7 +588,7 @@ defineExpose({ openUpdatePanel })
               size="sm"
               class="h-8 text-xs gap-1.5"
               :disabled="updateState === 'checking' || updateState === 'downloading'"
-              @click="handleCheckUpdate"
+              @click="handleCheckUpdate({ showError: true })"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :class="{ 'icon-spin': updateState === 'checking' }"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
               {{ updateState === 'checking' ? '正在联网检查…' : '检查软件更新' }}

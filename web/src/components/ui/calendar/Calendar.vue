@@ -21,14 +21,16 @@ defineOptions({ inheritAttrs: false })
 const props = defineProps({
   modelValue: { type: Object, required: false },
   defaultValue: { type: Object, required: false },
+  placeholder: { type: Object, required: false },
   locale: { type: String, default: 'zh-CN' },
   weekStartsOn: { type: Number, default: 1 },
   fixedWeeks: { type: Boolean, default: true },
   initialFocus: { type: Boolean, default: true },
+  preventDeselect: { type: Boolean, default: false },
   class: { type: [String, Object, Array], default: '' },
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits(['update:modelValue', 'update:placeholder'])
 </script>
 
 <template>
@@ -36,12 +38,15 @@ const emit = defineEmits(['update:modelValue'])
     v-bind="$attrs"
     :model-value="modelValue"
     :default-value="defaultValue"
+    :placeholder="placeholder"
     :locale="locale"
     :week-starts-on="weekStartsOn"
     :fixed-weeks="fixedWeeks"
     :initial-focus="initialFocus"
+    :prevent-deselect="preventDeselect"
     :class="cn('p-3', props.class)"
     @update:model-value="emit('update:modelValue', $event)"
+    @update:placeholder="emit('update:placeholder', $event)"
   >
     <template #default="{ grid, weekDays }">
       <CalendarHeader class="relative flex w-full items-center justify-between pb-3">

@@ -83,25 +83,58 @@ const filters = reactive({
   city: 'all',
   category: 'all',
   status: 'all',
-  date: todayString,
+  date: '',
 })
 
 const isDatePickerOpen = ref(false)
+const calendarPlaceholder = ref(parseDate(todayString))
+
 const selectedDate = computed({
-  get: () => parseDate(filters.date || todayString),
+  get: () => {
+    try {
+      return filters.date ? parseDate(filters.date) : undefined
+    } catch {
+      return undefined
+    }
+  },
   set: (value) => {
-    if (!value) return
-    filters.date = value.toString()
+    if (!value) {
+      filters.date = ''
+    } else {
+      filters.date = value.toString()
+      try {
+        calendarPlaceholder.value = parseDate(filters.date)
+      } catch {}
+    }
     isDatePickerOpen.value = false
     doSearch()
   },
 })
 
 const selectedDateLabel = computed(() => {
-  if (!filters.date) return '选择采集日期'
-  const [year, month, day] = filters.date.split('-')
-  return `${year}年${Number(month)}月${Number(day)}日`
+  if (!filters.date) return '全部日期'
+  try {
+    const [year, month, day] = filters.date.split('-')
+    return `${year}年${Number(month)}月${Number(day)}日`
+  } catch {
+    return filters.date
+  }
 })
+
+function clearDateFilter() {
+  filters.date = ''
+  isDatePickerOpen.value = false
+  doSearch()
+}
+
+function goToToday() {
+  filters.date = todayString
+  try {
+    calendarPlaceholder.value = parseDate(todayString)
+  } catch {}
+  isDatePickerOpen.value = false
+  doSearch()
+}
 
 function statusBadgeVariant(state) {
   if (state === '未演出' || state === 'upcoming') return 'default'
@@ -571,7 +604,7 @@ function resetFilters() {
   filters.city = 'all'
   filters.category = 'all'
   filters.status = 'all'
-  filters.date = todayString
+  filters.date = ''
   page.value = 1
   fetchShows()
 }
@@ -912,27 +945,40 @@ defineExpose({ refresh, fetchShows, loadFacets })
 
         <!-- 右侧筛选与功能组 -->
         <div class="flex items-center gap-2 shrink-0 ml-auto">
-          <!-- 默认显示今日采集数据，可通过 shadcn-ui Calendar 切换日期 -->
+          <!-- 采集日期筛选 (Calendar 弹窗) -->
           <div class="shrink-0">
             <Popover v-model:open="isDatePickerOpen">
               <PopoverTrigger as-child>
                 <Button
                   variant="outline"
-                  class="h-8 min-w-[150px] justify-start gap-2 rounded-xl border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 shadow-2xs hover:border-[var(--primary)] hover:bg-white"
+                  class="h-8 min-w-[130px] justify-start gap-1.5 rounded-xl border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 shadow-2xs hover:border-[var(--primary)] hover:bg-white"
                 >
-                  <CalendarDays class="h-3.5 w-3.5 text-[var(--primary)]" />
-                  <span>{{ selectedDateLabel }}</span>
+                  <CalendarDays class="h-3.5 w-3.5 text-[var(--primary)] shrink-0" />
+                  <span class="truncate">{{ selectedDateLabel }}</span>
+                  <span
+                    v-if="filters.date"
+                    class="ml-auto text-slate-400 hover:text-slate-700 text-xs px-1 cursor-pointer transition-colors"
+                    title="清空日期筛选（查看全部）"
+                    @click.stop="clearDateFilter"
+                  >✕</span>
                 </Button>
               </PopoverTrigger>
               <PopoverContent align="start" :side-offset="4" class="w-auto p-0">
-                <Calendar v-model="selectedDate" />
+                <Calendar v-model="selectedDate" :placeholder="calendarPlaceholder" />
                 <div class="flex items-center justify-between border-t border-slate-100 px-3 py-2">
-                  <span class="text-[11px] text-slate-400">按采集时间筛选</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-7 px-2 text-xs text-slate-500 hover:text-slate-800 hover:bg-slate-50"
+                    @click="clearDateFilter"
+                  >
+                    全部日期
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
                     class="h-7 px-2 text-xs text-[var(--primary)] hover:bg-slate-50"
-                    @click="selectedDate = parseDate(todayString)"
+                    @click="goToToday"
                   >
                     回到今天
                   </Button>
@@ -941,8 +987,8 @@ defineExpose({ refresh, fetchShows, loadFacets })
             </Popover>
           </div>
 
-          <!-- 1. 关键词输入框 (搜索演出、艺人、场馆名称...) -->
-          <div class="relative w-48 sm:w-56 shrink-0">
+          <!-- 1. 关键词输入框 (搜索演出、艺人、场馆...) -->
+          <div class="relative w-40 sm:w-48 shrink-0">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none z-10">
               <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
             </svg>
@@ -955,16 +1001,16 @@ defineExpose({ refresh, fetchShows, loadFacets })
             />
           </div>
 
-          <!-- 2. 城市 (City) 下拉选择 + 模糊搜索 -->
+          <!-- 2. 城市 下拉选择 + 模糊搜索 -->
           <div class="shrink-0">
             <Popover v-model:open="isCityDropdownOpen">
               <PopoverTrigger as-child>
                 <button 
                   type="button"
-                  class="h-8 px-3 bg-white border border-slate-200 text-slate-700 font-medium text-xs rounded-xl flex items-center gap-1.5 hover:border-[var(--primary)] transition-all cursor-pointer shadow-2xs"
+                  class="h-8 px-2.5 bg-white border border-slate-200 text-slate-700 font-medium text-xs rounded-xl flex items-center gap-1.5 hover:border-[var(--primary)] transition-all cursor-pointer shadow-2xs"
                 >
-                  <span class="truncate max-w-[90px]">
-                    {{ filters.city === 'all' || !filters.city ? '城市 (City)' : filters.city }}
+                  <span class="truncate max-w-[80px]">
+                    {{ filters.city === 'all' || !filters.city ? '城市' : filters.city }}
                   </span>
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="text-slate-400 shrink-0"><polyline points="6 9 12 15 18 9"/></svg>
                 </button>
@@ -989,7 +1035,7 @@ defineExpose({ refresh, fetchShows, loadFacets })
                     :class="filters.city === 'all' ? 'bg-[var(--primary-light,#fde8f3)] text-[var(--primary)] font-bold' : 'text-slate-700 hover:bg-slate-100'"
                     @click="selectCity('all')"
                   >
-                    <span>全部城市 (All)</span>
+                    <span>全部城市</span>
                     <span v-if="filters.city === 'all'">✓</span>
                   </button>
 
@@ -1013,14 +1059,14 @@ defineExpose({ refresh, fetchShows, loadFacets })
             </Popover>
           </div>
 
-          <!-- 3. 平台 (Platform) 下拉框 -->
+          <!-- 3. 平台 下拉框 -->
           <div class="shrink-0">
             <Select v-model="filters.source" @update:model-value="doSearch">
-              <SelectTrigger class="w-[125px]">
-                <SelectValue placeholder="平台 (Platform)" />
+              <SelectTrigger class="w-[88px]">
+                <SelectValue placeholder="平台" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">平台 (Platform)</SelectItem>
+                <SelectItem value="all">全部平台</SelectItem>
                 <SelectItem v-for="s in platformOptions" :key="s" :value="s">
                   {{ SOURCE_LABELS[s] || s }}
                 </SelectItem>
@@ -1028,14 +1074,14 @@ defineExpose({ refresh, fetchShows, loadFacets })
             </Select>
           </div>
 
-          <!-- 4. 分类 (Category) 下拉框 -->
+          <!-- 4. 分类 下拉框 -->
           <div class="shrink-0">
             <Select v-model="filters.category" @update:model-value="doSearch">
-              <SelectTrigger class="w-[125px]">
-                <SelectValue placeholder="分类 (Category)" />
+              <SelectTrigger class="w-[92px]">
+                <SelectValue placeholder="分类" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">分类 (Category)</SelectItem>
+                <SelectItem value="all">全部分类</SelectItem>
                 <SelectItem v-for="cat in facetOptions.category" :key="cat" :value="cat">
                   {{ cat }}
                 </SelectItem>
@@ -1043,14 +1089,14 @@ defineExpose({ refresh, fetchShows, loadFacets })
             </Select>
           </div>
 
-          <!-- 5. 状态 (Status) 下拉框 -->
+          <!-- 5. 状态 下拉框 -->
           <div class="shrink-0">
             <Select v-model="filters.status" @update:model-value="doSearch">
-              <SelectTrigger class="w-[125px]">
-                <SelectValue placeholder="状态 (Status)" />
+              <SelectTrigger class="w-[88px]">
+                <SelectValue placeholder="状态" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">状态 (Status)</SelectItem>
+                <SelectItem value="all">全部状态</SelectItem>
                 <SelectItem v-for="o in PERF_STATE_OPTIONS" :key="o.value" :value="o.value">
                   {{ o.label }}
                 </SelectItem>
@@ -1058,14 +1104,14 @@ defineExpose({ refresh, fetchShows, loadFacets })
             </Select>
           </div>
 
-          <!-- 6. 筛选 (Search) 主按钮 -->
+          <!-- 6. 筛选 主按钮 -->
           <button 
             type="button" 
-            class="h-8 px-3.5 rounded-xl text-white font-bold text-xs flex items-center gap-1 transition-all shadow-xs active:scale-[0.98] cursor-pointer shrink-0"
+            class="h-8 px-3 rounded-xl text-white font-bold text-xs flex items-center gap-1 transition-all shadow-xs active:scale-[0.98] cursor-pointer shrink-0"
             :style="{ backgroundColor: 'var(--primary)' }"
             @click="doSearch"
           >
-            <span>筛选 (Search)</span>
+            <span>筛选</span>
           </button>
 
           <!-- 7. 重置 按钮 -->

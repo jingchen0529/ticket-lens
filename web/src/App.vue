@@ -91,7 +91,7 @@ onMounted(() => {
   }, 4000)
 })
 
-// 标签页切换：设置→采集刷新冰拓；进入数据查询时重新拉库（v-show 不会 onMounted）
+// 标签页切换：设置→采集刷新冰拓；进入数据查询时重新拉库；进入设置自动检测更新（v-show 不会触发 onMounted）
 watch(currentTab, (newTab, oldTab) => {
   if (oldTab === 'settings' && newTab === 'crawl' && crawlViewRef.value?.checkBingtuoCredentials) {
     crawlViewRef.value.checkBingtuoCredentials()
@@ -99,7 +99,17 @@ watch(currentTab, (newTab, oldTab) => {
   if (newTab === 'shows' && showsViewRef.value?.refresh) {
     showsViewRef.value.refresh()
   }
+  if (newTab === 'settings' && settingsViewRef.value?.onTabActive) {
+    settingsViewRef.value.onTabActive()
+  }
 })
+
+function handleUpdateDetected(update) {
+  if (update) {
+    availableUpdate = update
+    updateAvailableVersion.value = update.version || ''
+  }
+}
 </script>
 
 <template>
@@ -170,6 +180,7 @@ watch(currentTab, (newTab, oldTab) => {
           ref="settingsViewRef"
           :current-theme="currentThemeColor"
           @update-theme="handleThemeChange"
+          @update-detected="handleUpdateDetected"
         />
       </main>
     </div>
