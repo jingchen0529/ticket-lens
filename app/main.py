@@ -6,16 +6,27 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.routers import crawl, settings, shows
+from app.services.crawl_jobs import shutdown_job_manager
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    await shutdown_job_manager()
+
 
 app = FastAPI(
     title="daxicrawler local API",
     description="本地演出数据查询与导出（local-first，仅监听 127.0.0.1）",
     version=__version__,
+    lifespan=lifespan,
 )
 
 # 前端两种来源：

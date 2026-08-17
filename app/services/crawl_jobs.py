@@ -243,6 +243,26 @@ class CrawlJobManager:
             record._task.cancel()
         return True
 
+    async def shutdown(self) -> None:
+        """服务退出前取消并等待活动任务，让 Playwright 的 finally 完成清理。"""
+        record = self.active
+        if record is None or record._task is None:
+            return
+
+        task = record._task
+        if not task.done():
+            record.append_log("WARN", "应用正在更新或退出，当前采集任务已停止")
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+        # create_task 后若任务尚未获得过执行机会，协程自己的 finally 不会运行。
+        if record.state in (JobState.PENDING, JobState.RUNNING):
+            record.state = JobState.CANCELLED
+            record.error = "任务已取消"
+            record.finished_at = datetime.utcnow()
+        if self._active_id == record.id:
+            self._active_id = None
+
     async def _run(self, record: JobRecord, config: AppConfig) -> None:
         record.state = JobState.RUNNING
         record.started_at = datetime.utcnow()
@@ -333,3 +353,9 @@ def get_job_manager() -> CrawlJobManager:
     if _manager is None:
         _manager = CrawlJobManager()
     return _manager
+
+
+async def shutdown_job_manager() -> None:
+    """FastAPI lifespan 使用；未创建管理器时不为关机额外创建实例。"""
+    if _manager is not None:
+        await _manager.shutdown()

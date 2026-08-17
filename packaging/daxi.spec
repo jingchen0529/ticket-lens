@@ -24,6 +24,14 @@ for pkg in ("playwright",):
     binaries += b
     hiddenimports += h
 
+# openpyxl：xlsx 导出（to_xlsx 函数内惰性导入，PyInstaller 静态分析收集不到），
+# 不收集则打包版导出 Excel 直接 500。collect_all 连带 et_xmlfile 与样式数据。
+for pkg in ("openpyxl",):
+    d, b, h = collect_all(pkg)
+    datas += d
+    binaries += b
+    hiddenimports += h
+
 # httpx 的 HTTPS 校验固定使用 certifi.where()，显式收集 CA 文件以保证
 # onedir 打包产物中始终存在 certifi/cacert.pem。
 datas += collect_data_files("certifi")
@@ -61,10 +69,10 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="daxi",
-    # 请求管理员权限：目标安装目录 C:\Program Files\Daolue 需要提权才能写入，
-    # 避免客户手动右键"以管理员身份运行"后仍因权限不足报
-    # "Error opening file for writing"。
-    uac_admin=True,
+    # 后端必须与 Tauri 壳保持同一权限级别，桌面壳才能可靠停止/回收它。
+    # 客户数据在 Program Files 不可写时会由 paths.py 回退到 LOCALAPPDATA，
+    # 后端本身无需管理员权限。
+    uac_admin=False,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

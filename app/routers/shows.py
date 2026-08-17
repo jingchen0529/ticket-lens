@@ -5,12 +5,14 @@
 
 from __future__ import annotations
 
+import os
 import urllib.parse
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 
+from app import BACKEND_BUILD_ID, __version__
 from app.core.config import load_config
 from app.repositories.show_repo import ShowQuery, ShowRepository
 from app.services.export import to_csv, to_xlsx
@@ -40,7 +42,22 @@ def _repo() -> ShowRepository:
 @router.get("/health")
 def health() -> dict:
     repo = _repo()
-    return {"status": "ok", "db": str(repo._db_path), "db_exists": repo.exists()}
+    parent_pid = os.environ.get("DAXI_PARENT_PID", "").strip()
+    return {
+        "status": "ok",
+        "service_id": "com.daxi.backend",
+        "api_protocol": 2,
+        # 发布流水线会给 Tauri 壳写入 tag 版本，并由壳在启动随包后端时传入。
+        # 源码独立运行则回退 Python 包版本，保持开发体验。
+        "version": os.environ.get("DAXI_DESKTOP_VERSION") or __version__,
+        "backend_version": __version__,
+        "backend_build_id": BACKEND_BUILD_ID,
+        "pid": os.getpid(),
+        "parent_pid": int(parent_pid) if parent_pid.isdigit() else None,
+        "instance_id": os.environ.get("DAXI_INSTANCE_ID", ""),
+        "db": str(repo._db_path),
+        "db_exists": repo.exists(),
+    }
 
 
 @router.get("/stats")

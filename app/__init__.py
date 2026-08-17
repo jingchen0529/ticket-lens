@@ -4,4 +4,8 @@
 数据来源为固定本地 SQLite 库（默认 data/daxi.sqlite3）。
 """
 
-__version__ = "0.1.0"
+from app.build_info import BACKEND_BUILD_ID, BACKEND_VERSION
+
+__version__ = BACKEND_VERSION
+
+__all__ = ["BACKEND_BUILD_ID", "BACKEND_VERSION", "__version__"]

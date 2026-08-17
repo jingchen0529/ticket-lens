@@ -71,6 +71,32 @@ jobs:
         with:
           python-version: "3.11"
 
+      # 必须在 PyInstaller 之前同时写入桌面版本和后端构建身份。只改
+      # tauri.conf.json 会让新版桌面继续携带无法识别的旧后端。
+      - name: Stamp release identity from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          RELEASE_VERSION: ${{ github.ref_name }}
+          BACKEND_BUILD_ID: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_VERSION#v}"
+          if ! [[ "$OSS_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]; then
+            echo "::error::OSS_BUCKET 缺失或不是合法的 OSS bucket 名"
+            exit 1
+          fi
+          updater_url="https://${OSS_BUCKET}.${OSS_ENDPOINT}/releases/latest.json"
+          python scripts/stamp_release.py \
+            --version "$version" \
+            --build-id "$BACKEND_BUILD_ID" \
+            --updater-url "$updater_url"
+          echo "stamped desktop/backend version: $version"
+          echo "stamped backend build id: $BACKEND_BUILD_ID"
+          echo "stamped updater endpoint: $updater_url"
+
       - name: Install uv
         run: pip install uv
 
@@ -148,43 +174,6 @@ jobs:
         with:
           workspaces: web/src-tauri
           key: ${{ matrix.label }}
-
-      # 把 tag 版本号和 CI 实际使用的 OSS bucket 一起写进 tauri.conf.json。
-      # 两者都必须来自本次发布配置：版本不一致会无限重复提示更新，bucket 不一致
-      # 则客户端会请求一个不存在的更新源（v1.0.14/v1.0.15 的失败原因）。
-      # 只在 tag 触发时改；手动 workflow_dispatch 保持源码配置用于烟测。
-      - name: Stamp release config from tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        env:
-          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
-          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          conf="web/src-tauri/tauri.conf.json"
-          if ! [[ "$OSS_BUCKET" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]; then
-            echo "::error::OSS_BUCKET 缺失或不是合法的 OSS bucket 名"
-            exit 1
-          fi
-          updater_url="https://${OSS_BUCKET}.${OSS_ENDPOINT}/releases/latest.json"
-          RELEASE_CONF="$conf" RELEASE_VERSION="$version" UPDATER_URL="$updater_url" node -e '
-            const fs = require("fs");
-            const path = process.env.RELEASE_CONF;
-            const config = JSON.parse(fs.readFileSync(path, "utf8"));
-            const endpoints = config.plugins?.updater?.endpoints;
-            if (!Array.isArray(endpoints) || endpoints.length === 0) {
-              throw new Error("tauri.conf.json 缺少 updater endpoints");
-            }
-            config.version = process.env.RELEASE_VERSION;
-            config.plugins.updater.endpoints = [
-              process.env.UPDATER_URL,
-              ...endpoints.slice(1),
-            ];
-            fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
-          '
-          echo "stamped version: $version"
-          echo "stamped updater endpoint: $updater_url"
 
       # tauri build 会顺带跑 npm run build（前端）并把 tauri.conf.json 的
       # resources（packaging/dist/daxi）打进安装包。

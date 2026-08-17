@@ -101,7 +101,7 @@ export DAXI_CAPTCHA_PASSWORD=...
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/health` | 健康检查 + 库路径与是否存在 |
+| GET | `/api/health` | 健康检查 + 版本、PID、启动实例与库路径 |
 | GET | `/api/shows` | 分页查询（source/city/category/status/perf_state/keyword/排序） |
 | GET | `/api/shows/{id}` | 单条详情 |
 | GET | `/api/facets` | 各维度可选值，供筛选下拉 |

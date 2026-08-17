@@ -3,7 +3,7 @@ name = "daxi-desktop"
 version = "0.1.0"
 description = "大麦/猫眼演出数据采集 桌面客户端"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.77.2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -14,10 +14,14 @@ tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-http = "2"
-tauri-plugin-updater = "2"
+# 2.10.1 在 Windows ShellExecuteW/UAC 取消时仍无条件 exit(0)。固定到官方
+# v2 分支中已检查 ShellExecuteW 返回值的提交，确认安装器启动后才退出桌面壳。
+tauri-plugin-updater = { git = "https://github.com/tauri-apps/plugins-workspace", rev = "db9c5998feff9384f9cbbefcbe0d45937c00a1fc" }
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sysinfo = { version = "0.30.13", default-features = false }
 
 [features]
 # 生产构建默认启用自定义协议

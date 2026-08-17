@@ -58,7 +58,10 @@ export async function downloadAndInstall(update, onProgress) {
   try {
     let downloaded = 0
     let contentLength = 0
-    await update.downloadAndInstall((event) => {
+    // 拆开下载与安装，确保网络和签名校验完成后才进入安装阶段。不要在这里先
+    // 停后端：Windows updater 启动 NSIS 后会直接退出进程，UAC 被取消时 JS
+    // 无法 catch；后端由父进程监督管道随桌面退出，NSIS hook 再做强制兜底。
+    await update.download((event) => {
       switch (event.event) {
         case 'Started':
           contentLength = event.data.contentLength || 0
@@ -74,6 +77,8 @@ export async function downloadAndInstall(update, onProgress) {
           break
       }
     })
+
+    await update.install()
     await relaunch()
   } catch (e) {
     throw normalizeUpdaterError(e, '下载安装失败')

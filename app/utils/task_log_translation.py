@@ -1040,7 +1040,10 @@ def translate_task_log(
         re.I | re.S,
     )
     if match:
-        return f"新详情不完整，已保留{_platform(match[1])}项目 {match[2]} 的旧数据"
+        return (
+            f"当前{_platform(match[1])}项目 {match[2]} 与已有数据重复，"
+            "本次未发现有效更新，已暂时跳过"
+        )
 
     if _CJK_RE.search(raw):
         translated = _translate_mixed_chinese(raw)

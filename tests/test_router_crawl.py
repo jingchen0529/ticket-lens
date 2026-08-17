@@ -285,6 +285,23 @@ async def test_cancel(monkeypatch):
     assert mgr.active is None
 
 
+@pytest.mark.asyncio
+async def test_shutdown_cancels_and_awaits_active_job(monkeypatch):
+    import app.services.crawl_jobs as cj
+
+    monkeypatch.setattr(cj, "run_crawl", _fake_run_slow)
+    mgr = cj.CrawlJobManager()
+    job = CrawlJob(sources=[SourcePlatform.DAMAI], cities=["北京"], max_pages=1)
+
+    rec = await mgr.submit(job, config=object())
+    await asyncio.sleep(0)
+    await mgr.shutdown()
+
+    assert rec._task is not None and rec._task.done()
+    assert rec.state.value == "cancelled"
+    assert mgr.active is None
+
+
 def test_manual_captcha_status():
     import app.services.crawl_jobs as cj
 

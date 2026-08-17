@@ -217,6 +217,12 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="监听地址；默认仅本机"),
     port: int = typer.Option(8000, "--port", help="端口"),
     reload: bool = typer.Option(False, "--reload", help="改代码自动重启（开发用）"),
+    supervised: bool = typer.Option(
+        False,
+        "--supervised",
+        help="由桌面壳监督生命周期（内部选项）",
+        hidden=True,
+    ),
 ) -> None:
     """启动本地 API 服务（前端从这里查询/导出数据）。"""
     import uvicorn
@@ -230,11 +236,22 @@ def serve(
         )
     console.print(f"[bold]daxi serve[/bold] http://{host}:{port}  (docs: /docs)")
 
+    if supervised and reload:
+        raise typer.BadParameter("--supervised 不能与 --reload 同时使用")
+
     # PyInstaller 冻结后无法用 "app.main:app" 字符串导入（uvicorn 会重新按模块路径
     # import，冻结环境里失效）。此时直接传入 app 对象。reload 依赖字符串路径与子进程，
     # 打包环境用不到，仅开发时走字符串分支。
     # log_config=None：不覆盖我们刚配好的根日志（文件+控制台），uvicorn 日志冒泡到 root。
-    if getattr(sys, "frozen", False):
+    if supervised:
+        from app.main import app as asgi_app
+        from app.utils.process_supervisor import start_parent_pipe_watchdog
+
+        config = uvicorn.Config(asgi_app, host=host, port=port, log_config=None)
+        server = uvicorn.Server(config)
+        start_parent_pipe_watchdog(server)
+        server.run()
+    elif getattr(sys, "frozen", False):
         from app.main import app as asgi_app
 
         uvicorn.run(asgi_app, host=host, port=port, log_config=None)

@@ -81,12 +81,33 @@ def _is_writable(directory: Path) -> bool:
         return False
 
 
-def _migrate_legacy_macos_data(legacy: Path, target: Path) -> None:
-    """首次升级时把旧 App 包内的数据迁到 macOS 用户数据目录。"""
+def _migrate_legacy_data(legacy: Path, target: Path) -> None:
+    """把旧安装目录数据合并到用户目录，但绝不覆盖用户目录中的现有文件。
+
+    Windows 历史版本以管理员权限运行时，数据可能写在 Program Files 下的
+    ``backend/data``。新版降为普通权限后必须在首次启动时把这些数据带到
+    LOCALAPPDATA，否则数据库和 Cookie 会看起来像是“消失”了。macOS 旧版
+    App 包内数据也复用同一迁移规则。
+    """
     try:
-        if not legacy.is_dir() or (target.exists() and any(target.iterdir())):
+        if not legacy.is_dir():
             return
-        shutil.copytree(legacy, target, dirs_exist_ok=True)
+        target.mkdir(parents=True, exist_ok=True)
+
+        def copy_missing(source: Path, destination: Path) -> None:
+            try:
+                if source.is_dir():
+                    destination.mkdir(parents=True, exist_ok=True)
+                    for child in source.iterdir():
+                        copy_missing(child, destination / child.name)
+                elif not destination.exists():
+                    shutil.copy2(source, destination)
+            except OSError:
+                # 单个损坏/不可读文件不应阻断其他数据库、Cookie 或配置迁移。
+                return
+
+        for source in legacy.iterdir():
+            copy_missing(source, target / source.name)
     except OSError:
         # 迁移失败不阻止启动，后续仍使用可写的系统用户数据目录。
         return
@@ -110,7 +131,7 @@ def data_dir() -> Path:
     if is_frozen():
         if sys.platform == "darwin":
             target = _system_user_data_dir()
-            _migrate_legacy_macos_data(executable_dir() / "data", target)
+            _migrate_legacy_data(executable_dir() / "data", target)
             target.mkdir(parents=True, exist_ok=True)
             return target
 
@@ -118,6 +139,8 @@ def data_dir() -> Path:
         if _is_writable(beside_app):
             return beside_app
         fallback = _system_user_data_dir()
+        if sys.platform == "win32":
+            _migrate_legacy_data(beside_app, fallback)
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 

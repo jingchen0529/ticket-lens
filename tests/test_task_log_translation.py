@@ -164,6 +164,18 @@ from app.utils.task_log_translation import translate_task_error, translate_task_
             "bingtop request failed: ConnectTimeout password=must-not-leak",
             "冰拓识别请求失败，未取得滑块距离（详细原因见服务端日志）",
         ),
+        (
+            "keep existing raw detail source=damai source_id=1067834954608 "
+            "old_sessions=2 new_sessions=0",
+            "当前大麦网项目 1067834954608 与已有数据重复，"
+            "本次未发现有效更新，已暂时跳过",
+        ),
+        (
+            "keep existing show detail source=damai source_id=1067977288504 "
+            "because incoming detail is missing or incomplete",
+            "当前大麦网项目 1067977288504 与已有数据重复，"
+            "本次未发现有效更新，已暂时跳过",
+        ),
     ],
 )
 def test_known_task_logs_are_translated(raw, expected):
