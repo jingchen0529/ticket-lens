@@ -120,6 +120,18 @@ def _translate_mixed_chinese(text: str) -> str:
     return result
 
 
+def _excerpt(text: str, limit: int = 160) -> str:
+    """取单行摘要并做常见词翻译，超长截断。用于把真实异常透传给客户。"""
+    first = (str(text or "").strip().splitlines() or [""])[0].strip()
+    if not first:
+        return ""
+    first = re.sub(r"\s+", " ", first)
+    first = _translate_mixed_chinese(first)
+    if len(first) > limit:
+        first = first[: limit - 3] + "..."
+    return first
+
+
 def translate_task_error(text: str, *, logger_name: str = "") -> str:
     """把任务 error / result.errors 转为客户可读中文。"""
     raw = str(text or "").strip()
@@ -162,6 +174,18 @@ def translate_task_error(text: str, *, logger_name: str = "") -> str:
                 f"大麦网采集失败（城市：{_value(m[1])}，"
                 f"关键词：{_value(m[2])}，第 {m[3]} 页）"
             ),
+        ),
+        (
+            r"executable doesn't exist at (.*)",
+            lambda m: (
+                f"浏览器组件缺失：未找到 {m[1]}，请重新安装或升级到最新版"
+            ),
+        ),
+        (
+            r"(?:target page, context or browser has been closed|browser closed "
+            r"unexpectedly|process exited with code \S+|renderer process crashed"
+            r"|connection refused).*",
+            lambda m: "浏览器进程异常退出（可能被安全软件拦截或系统资源不足），请重试",
         ),
     )
     for pattern, renderer in patterns:
@@ -230,6 +254,11 @@ def translate_task_log(
     if raw.lower().startswith("crawler failed:"):
         reason = raw.split(":", 1)[1].strip()
         return f"平台采集失败：{translate_task_error(reason, logger_name=logger_name)}"
+
+    # 浏览器会话启动失败：把真实异常摘要直接透传给客户（完整堆栈在 server.log）
+    match = re.fullmatch(r"browser session startup failed: (.*)", raw, re.I | re.S)
+    if match:
+        return f"采集浏览器启动失败：{_excerpt(match[1])}"
 
     match = re.fullmatch(
         r"crawl finished raw=(\d+) shows=(\d+) ledger_visible=(\d+) "
@@ -788,6 +817,199 @@ def translate_task_log(
         )
     if re.fullmatch(r"yunma needs api_key\(token\)", raw, re.I):
         return "云码验证码服务配置不完整：请填写访问密钥"
+
+    # 验证码诊断仅展示安全数值；URL、captchaId、图片和令牌不进入客户日志。
+    match = re.fullmatch(
+        r"bingtop dual upload type=(\d+)\s+main=.*\s+sub=.*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return f"冰拓滑块题图片已提交：类型 {match[1]}"
+    match = re.fullmatch(
+        r"bingtop ok type=(\d+) url=\S+ captchaId=\S+ "
+        r"recognition=(-?\d+(?:\.\d+)?).*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return f"冰拓识别成功：类型 {match[1]}，返回原始距离 {match[2]}"
+    if re.fullmatch(r"bingtop (?:type1357 )?request failed:.*", raw, re.I | re.S):
+        return "冰拓识别请求失败，未取得滑块距离（详细原因见服务端日志）"
+    match = re.fullmatch(
+        r"bingtop (?:non-json|error|empty recognition|recognition error|"
+        r"non-numeric recognition) type=(\d+).*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return (
+            f"冰拓未返回有效距离：类型 {match[1]}"
+            "（服务响应详情见服务端日志）"
+        )
+    match = re.fullmatch(
+        r"bingtop type=(\d+) (?:needs captchaData\+subCaptchaData|"
+        r"refuse non-image(?: payload| main)?|missing subCaptchaData).*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return f"冰拓滑块题图片不完整或格式无效：类型 {match[1]}，未发起识别"
+
+    match = re.fullmatch(r"provider upload prep type=(\d+) .*", raw, re.I | re.S)
+    if match:
+        return f"滑块题图片准备完成：类型 {match[1]}，正在调用打码服务"
+    if re.fullmatch(r"provider solve_fruit_offset error:.*", raw, re.I | re.S):
+        return "打码服务调用异常，未取得滑块距离（详细原因见服务端日志）"
+    match = re.fullmatch(
+        r"provider returned no offset \(round=(\d+)/(\d+)\)", raw, re.I
+    )
+    if match:
+        return f"打码服务第 {match[1]}/{match[2]} 次未返回有效滑块距离"
+    match = re.fullmatch(
+        r"provider returned no offset; refreshing captcha to retry "
+        r"\((\d+)/(\d+)\)",
+        raw,
+        re.I,
+    )
+    if match:
+        return f"打码服务未返回距离，正在刷新验证码后重试（{match[1]}/{match[2]}）"
+    match = re.fullmatch(
+        r"provider \(bingtop\) failed (\d+) times consecutively without offset;.*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return f"冰拓连续 {match[1]} 次未返回有效滑块距离，自动识别停止"
+    match = re.fullmatch(
+        r"provider path: stale payload key=.* round=(\d+), refresh",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return f"第 {match[1]} 轮滑块题已过期，正在刷新题目"
+    match = re.fullmatch(r"provider path: geometry missing \(round=(\d+)\)", raw, re.I)
+    if match:
+        return f"第 {match[1]} 轮未读取到滑块页面尺寸，正在重试"
+    match = re.fullmatch(
+        r"provider path: wait newslidecaptcha dual images "
+        r"\(round=(\d+) img=(\S+) ques=(\S+)\)",
+        raw,
+        re.I,
+    )
+    if match:
+        return (
+            f"第 {match[1]} 轮正在等待滑块双图"
+            f"（主图：{_yes_no(match[2])}，题图：{_yes_no(match[3])}）"
+        )
+    match = re.fullmatch(r"provider path: no image for round=(\d+)", raw, re.I)
+    if match:
+        return f"第 {match[1]} 轮未取得滑块图片，正在刷新题目"
+
+    match = re.fullmatch(
+        r"provider map styles edge_ui=(-?\d+(?:\.\d+)?) "
+        r"raw_ui=(-?\d+(?:\.\d+)?) \(drag edge_ui\)",
+        raw,
+        re.I,
+    )
+    if match:
+        return (
+            f"滑块坐标换算核对：右边缘模式 {match[1]}，"
+            f"原始坐标模式 {match[2]}，本次采用 {match[1]}"
+        )
+    match = re.fullmatch(
+        r"provider fruit offset raw=(-?\d+(?:\.\d+)?) "
+        r"logic_w=(-?\d+(?:\.\d+)?) ui_x=(-?\d+(?:\.\d+)?) "
+        r"max_slide=(-?\d+(?:\.\d+)?) map=\S+",
+        raw,
+        re.I,
+    )
+    if match:
+        return (
+            f"滑块距离换算：原始返回 {match[1]}，页面拖动 {match[3]}"
+            f"（题图宽 {match[2]}，最大可滑 {match[4]}）"
+        )
+    match = re.fullmatch(
+        r"drag_to_offset target=(-?\d+(?:\.\d+)?) "
+        r"dist=(-?\d+(?:\.\d+)?) mouse_dx=(-?\d+(?:\.\d+)?) "
+        r"knob_dx=(-?\d+(?:\.\d+)?).*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return (
+            f"滑块拖动完成：目标 {match[1]}，鼠标位移 {match[3]}，"
+            f"滑块实际位移 {match[4]}"
+        )
+    match = re.fullmatch(
+        r"fruit validate seq=(\d+) http=(\S+) code=(\S+).*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        code = _value(match[3], "未知")
+        if code == "0":
+            outcome = "通过"
+        elif code == "未知":
+            outcome = "未取得结果"
+        else:
+            outcome = "未通过"
+        return (
+            f"大麦滑块校验{outcome}：状态码 {code}，"
+            f"网络状态码 {_value(match[2], '未知')}"
+        )
+    match = re.fullmatch(
+        r"provider validate correlation seq=\S+ "
+        r"protocol_per=(-?\d+(?:\.\d+)?) actual_per=(-?\d+(?:\.\d+)?)",
+        raw,
+        re.I,
+    )
+    if match:
+        return f"滑块比例核对：预计 {match[1]}，实际 {match[2]}"
+    match = re.fullmatch(
+        r"provider drag vs bingtop: raw=(-?\d+(?:\.\d+)?) "
+        r"ui_x=(-?\d+(?:\.\d+)?) mouse_dx=(-?\d+(?:\.\d+)?) "
+        r"knob_dx=(-?\d+(?:\.\d+)?).*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return (
+            f"冰拓距离执行核对：原始 {match[1]}，目标 {match[2]}，"
+            f"鼠标位移 {match[3]}，滑块位移 {match[4]}"
+        )
+    match = re.fullmatch(
+        r"fruit slider accepted by validate at ui_x=(-?\d+(?:\.\d+)?)",
+        raw,
+        re.I,
+    )
+    if match:
+        return f"水果滑块验证已通过（页面拖动距离 {match[1]}）"
+    match = re.fullmatch(
+        r"fruit slider rejected by validate code=(\S+) "
+        r"at ui_x=(-?\d+(?:\.\d+)?)",
+        raw,
+        re.I,
+    )
+    if match:
+        return f"大麦拒绝本次滑块：状态码 {match[1]}，页面拖动距离 {match[2]}"
+    match = re.fullmatch(
+        r"validate rejected code=(\S+) but no replacement puzzle arrived",
+        raw,
+        re.I,
+    )
+    if match:
+        return f"大麦拒绝滑块（状态码 {match[1]}），且未下发新题，自动处理停止"
+    match = re.fullmatch(
+        r"provider path: knob stuck at ui_x=(-?\d+(?:\.\d+)?);.*",
+        raw,
+        re.I | re.S,
+    )
+    if match:
+        return f"滑块未跟随鼠标移动（目标距离 {match[1]}），正在刷新重试"
+    if re.fullmatch(r"fruit slider error:.*", raw, re.I | re.S):
+        return "滑块自动处理发生异常，已停止本次自动验证（详细原因见服务端日志）"
+
     match = re.fullmatch(r"fruit slider round[= ](\d+)(?:/(\d+))?.*", raw, re.I | re.S)
     if match:
         total = f"/{match[2]}" if match[2] else ""

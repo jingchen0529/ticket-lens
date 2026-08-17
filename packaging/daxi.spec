@@ -61,6 +61,10 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="daxi",
+    # 请求管理员权限：目标安装目录 C:\Program Files\Daolue 需要提权才能写入，
+    # 避免客户手动右键"以管理员身份运行"后仍因权限不足报
+    # "Error opening file for writing"。
+    uac_admin=True,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

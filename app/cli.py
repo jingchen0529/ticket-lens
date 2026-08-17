@@ -221,6 +221,9 @@ def serve(
     """启动本地 API 服务（前端从这里查询/导出数据）。"""
     import uvicorn
 
+    # 服务模式下根日志也要有落盘通道：Windows 打包版控制台不可见，
+    # 任务失败的真实堆栈只进 server.log 文件。
+    setup_logging(verbose=False, console=console)
     if host not in ("127.0.0.1", "localhost"):
         console.print(
             f"[yellow]注意：host={host} 会对外暴露服务，本地应用建议保持 127.0.0.1[/yellow]"
@@ -230,12 +233,13 @@ def serve(
     # PyInstaller 冻结后无法用 "app.main:app" 字符串导入（uvicorn 会重新按模块路径
     # import，冻结环境里失效）。此时直接传入 app 对象。reload 依赖字符串路径与子进程，
     # 打包环境用不到，仅开发时走字符串分支。
+    # log_config=None：不覆盖我们刚配好的根日志（文件+控制台），uvicorn 日志冒泡到 root。
     if getattr(sys, "frozen", False):
         from app.main import app as asgi_app
 
-        uvicorn.run(asgi_app, host=host, port=port)
+        uvicorn.run(asgi_app, host=host, port=port, log_config=None)
     else:
-        uvicorn.run("app.main:app", host=host, port=port, reload=reload)
+        uvicorn.run("app.main:app", host=host, port=port, reload=reload, log_config=None)
 
 
 @app.command("show-config")

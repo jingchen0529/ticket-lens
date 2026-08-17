@@ -135,6 +135,10 @@ async def run_crawl(job: CrawlJob, config: AppConfig) -> CrawlResult:
                     logger.exception("crawler failed: %s", msg)
                     result.errors.append(msg)
         except Exception as exc:  # noqa: BLE001
+            # 走到这里 = 浏览器会话建立失败（采集环境起不来）：把真实异常
+            # 摘要写进任务日志，完整堆栈经 logger.exception 落盘 server.log。
+            brief = (str(exc).strip().splitlines() or [""])[0] or type(exc).__name__
+            logger.error("browser session startup failed: %s", brief)
             msg = f"{src.value}: {exc}"
             logger.exception("crawler failed: %s", msg)
             result.errors.append(msg)

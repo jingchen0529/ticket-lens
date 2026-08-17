@@ -130,7 +130,9 @@ async def test_manual_solver_publishes_and_clears_intervention_status(monkeypatc
 
     assert result.ok is True
     record.set_manual_captcha.assert_called_once()
-    assert "连续 3 次" in record.set_manual_captcha.call_args.kwargs["reason"]
+    reason = record.set_manual_captcha.call_args.kwargs["reason"]
+    assert "冰拓识别、滑块执行或平台校验未通过" in reason
+    assert "连续 3 次" not in reason
     assert record.set_manual_captcha.call_args.kwargs["provider"] == "bingtop"
     solver._confirm_cleared.assert_awaited_once()  # type: ignore[attr-defined]
     record.clear_manual_captcha.assert_called_once()

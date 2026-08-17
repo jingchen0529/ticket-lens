@@ -129,10 +129,57 @@ from app.utils.task_log_translation import translate_task_error, translate_task_
             "bingtop needs username + password",
             "冰拓验证码服务配置不完整：请填写用户名和密码",
         ),
+        (
+            "bingtop ok type=1358 url=https://www.bingtop.com/ocr/upload/ "
+            "captchaId=1358-secret recognition=188",
+            "冰拓识别成功：类型 1358，返回原始距离 188",
+        ),
+        (
+            "provider fruit offset raw=188.00 logic_w=320.0 "
+            "ui_x=172.0 max_slide=272.0 map=fruit_right_edge",
+            "滑块距离换算：原始返回 188.00，页面拖动 172.0"
+            "（题图宽 320.0，最大可滑 272.0）",
+        ),
+        (
+            "drag_to_offset target=172.00 dist=172.00 mouse_dx=172.00 "
+            "knob_dx=171.50 track_sum_dx=172.00 max_slide=272.0 start=(584.0,580.0)",
+            "滑块拖动完成：目标 172.00，鼠标位移 172.00，滑块实际位移 171.50",
+        ),
+        (
+            "fruit validate seq=2 http=200 code=300 token_match=True "
+            "per=0.613 width=272.0",
+            "大麦滑块校验未通过：状态码 300，网络状态码 200",
+        ),
+        (
+            "provider drag vs bingtop: raw=188.00 ui_x=172.0 "
+            "mouse_dx=172.00 knob_dx=171.50 delta_mouse=0.00 delta_knob=-0.50",
+            "冰拓距离执行核对：原始 188.00，目标 172.0，"
+            "鼠标位移 172.00，滑块位移 171.50",
+        ),
+        (
+            "validate rejected code=300 but no replacement puzzle arrived",
+            "大麦拒绝滑块（状态码 300），且未下发新题，自动处理停止",
+        ),
+        (
+            "bingtop request failed: ConnectTimeout password=must-not-leak",
+            "冰拓识别请求失败，未取得滑块距离（详细原因见服务端日志）",
+        ),
     ],
 )
 def test_known_task_logs_are_translated(raw, expected):
     assert translate_task_log(raw) == expected
+
+
+def test_bingtop_success_log_does_not_expose_response_identifiers():
+    translated = translate_task_log(
+        "bingtop ok type=1358 url=https://www.bingtop.com/ocr/upload/ "
+        "captchaId=1358-secret recognition=188"
+    )
+
+    assert "188" in translated
+    assert "https://" not in translated
+    assert "captchaId" not in translated
+    assert "1358-secret" not in translated
 
 
 def test_unknown_english_log_returns_chinese_summary_with_context():
@@ -165,4 +212,32 @@ def test_task_error_and_mixed_fields_are_translated():
     assert unknown_mixed == (
         "采集引擎发生异常，详细原因已记录在服务端日志"
         "（项目编号：123）"
+    )
+
+
+def test_browser_startup_failure_surfaces_real_error():
+    raw = (
+        "browser session startup failed: Executable doesn't exist at "
+        r"C:\Program Files\Daolue\backend\ms-playwright\chromium-1228\chrome-win64\chrome.exe"
+    )
+    assert translate_task_log(raw) == (
+        "采集浏览器启动失败：Executable doesn't exist at "
+        r"C:\Program Files\Daolue\backend\ms-playwright\chromium-1228\chrome-win64\chrome.exe"
+    )
+
+    err = translate_task_error(
+        "damai: Executable doesn't exist at "
+        r"C:\Program Files\Daolue\backend\ms-playwright\chromium-1228\chrome-win64\chrome.exe"
+    )
+    assert err == (
+        "大麦网：浏览器组件缺失：未找到 "
+        r"C:\Program Files\Daolue\backend\ms-playwright\chromium-1228\chrome-win64\chrome.exe"
+        "，请重新安装或升级到最新版"
+    )
+
+    crashed = translate_task_error(
+        "damai: browser closed unexpectedly during launch"
+    )
+    assert crashed == (
+        "大麦网：浏览器进程异常退出（可能被安全软件拦截或系统资源不足），请重试"
     )

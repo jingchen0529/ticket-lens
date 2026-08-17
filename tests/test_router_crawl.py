@@ -191,6 +191,18 @@ async def test_job_logs_capture_captcha_logger(monkeypatch):
         logging.getLogger("app.crawlers.damai.fruit_slider").warning(
             "fruit: no newslidecaptcha payload yet (round=1)"
         )
+        logging.getLogger("app.browser.captcha.providers").info(
+            "bingtop ok type=1358 url=https://www.bingtop.com/ocr/upload/ "
+            "captchaId=1358-secret recognition=188"
+        )
+        logging.getLogger("app.crawlers.damai.fruit_slider").info(
+            "provider fruit offset raw=188.00 logic_w=320.0 "
+            "ui_x=172.0 max_slide=272.0 map=fruit_right_edge"
+        )
+        logging.getLogger("app.crawlers.damai.fruit_slider").info(
+            "fruit validate seq=1 http=200 code=300 token_match=True "
+            "per=0.613 width=272.0"
+        )
         logging.getLogger("captcha.damai").warning(
             "[damai] auto failed, fallback manual: fruit slider rejected or not cleared"
         )
@@ -214,6 +226,11 @@ async def test_job_logs_capture_captcha_logger(monkeypatch):
     texts = " | ".join(row["text"] for row in rec.logs)
     assert "大麦网触发安全验证" in texts
     assert "验证码模块出现可恢复异常" in texts
+    assert "冰拓识别成功：类型 1358，返回原始距离 188" in texts
+    assert "滑块距离换算：原始返回 188.00，页面拖动 172.0" in texts
+    assert "大麦滑块校验未通过：状态码 300，网络状态码 200" in texts
+    assert "https://www.bingtop.com" not in texts
+    assert "1358-secret" not in texts
     assert "已转为人工验证" in texts
     assert any(row["level"] == "WARN" for row in rec.logs)
     # result.errors 也会写入 ERROR 行

@@ -83,14 +83,10 @@ class CaptchaSolver(abc.ABC):
         from app.services.crawl_jobs import get_job_manager
 
         provider_name = str(getattr(getattr(self, "provider", None), "name", "") or "")
-        retry_limit = max(
-            1,
-            int(getattr(captcha_cfg, "fruit_max_rounds", 3) or 3),
-        )
         reason = "验证码自动求解失败，需要人工介入"
         if provider_name in ("bingtop", "冰拓"):
             reason = (
-                f"冰拓打码连续 {retry_limit} 次未返回有效距离或解析错误，需要人工介入。"
+                "冰拓识别、滑块执行或平台校验未通过，需要人工介入。"
                 "请在已打开的浏览器窗口中手动拖动滑块完成验证。"
             )
         elif provider_name:
