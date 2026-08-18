@@ -23,7 +23,8 @@ const props = defineProps({
   defaultValue: { type: Object, required: false },
   placeholder: { type: Object, required: false },
   locale: { type: String, default: 'zh-CN' },
-  weekStartsOn: { type: Number, default: 1 },
+  // 必须是 0：radix 在 zh-CN locale（基准周一）上再叠加该偏移，传 1 会从星期二开始
+  weekStartsOn: { type: Number, default: 0 },
   fixedWeeks: { type: Boolean, default: true },
   initialFocus: { type: Boolean, default: true },
   preventDeselect: { type: Boolean, default: false },

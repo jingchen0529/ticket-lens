@@ -4,7 +4,7 @@ import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { open as shellOpen } from '@tauri-apps/plugin-shell'
 import { parseDate } from '@internationalized/date'
-import { CalendarDays } from 'lucide-vue-next'
+import { CalendarDays, ChevronDown } from 'lucide-vue-next'
 import { api, IN_TAURI } from '../api'
 
 // 引入 shadcn-ui 核心组件
@@ -13,7 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toast'
-import { Calendar } from '@/components/ui/calendar'
+import { RangeCalendar } from '@/components/ui/range-calendar'
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area'
 import { Field, FieldLabel, FieldDescription } from '@/components/ui/field'
 import {
@@ -76,6 +76,40 @@ function localDateString(date = new Date()) {
 
 const todayString = localDateString()
 
+// 采集日期往前推 n 个自然月的同一天（月末不足则落到该月最后一天，如 3-31 减 1 月 → 2-28）
+function shiftMonths(date, months) {
+  const probe = new Date(date.getFullYear(), date.getMonth() - months, 1)
+  const lastDay = new Date(probe.getFullYear(), probe.getMonth() + 1, 0).getDate()
+  probe.setDate(Math.min(date.getDate(), lastDay))
+  return probe
+}
+
+// 采集日期往前推 n 个自然日
+function shiftDays(date, days) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() - days)
+}
+
+// 日期快捷区间：后端按含端点的本地日历日区间过滤 crawled_at。
+// days: 含今天在内往前推的自然日数；months: 往前推的自然月数。
+const DATE_PRESETS = [
+  { key: 'today', label: '今天', days: 1 },
+  { key: '7d', label: '近 7 天', days: 7 },
+  { key: '30d', label: '近 30 天', days: 30 },
+  { key: '3m', label: '近 3 个月', months: 3 },
+  { key: '6m', label: '近半年', months: 6 },
+  { key: '1y', label: '近一年', months: 12 },
+  { key: '2y', label: '近两年', months: 24 },
+]
+
+function presetRange(preset) {
+  // from / to 同源于一次取时，避免应用长期挂着跨天后两端不自洽
+  const today = new Date()
+  const from = preset.months
+    ? shiftMonths(today, preset.months)
+    : shiftDays(today, preset.days - 1)
+  return { from: localDateString(from), to: localDateString(today) }
+}
+
 // 1. 筛选条件（仅保留后端真实支持的维度）
 const filters = reactive({
   keyword: '',
@@ -83,58 +117,94 @@ const filters = reactive({
   city: 'all',
   category: 'all',
   status: 'all',
-  date: '',
+  // 采集日期区间，含端点。始终有值（默认今天），要看更早的数据从快捷预设选
+  dateFrom: todayString,
+  dateTo: todayString,
 })
 
 const isDatePickerOpen = ref(false)
 const calendarPlaceholder = ref(parseDate(todayString))
 
-const selectedDate = computed({
-  get: () => {
-    try {
-      return filters.date ? parseDate(filters.date) : undefined
-    } catch {
-      return undefined
-    }
-  },
-  set: (value) => {
-    if (!value) {
-      filters.date = ''
-    } else {
-      filters.date = value.toString()
-      try {
-        calendarPlaceholder.value = parseDate(filters.date)
-      } catch {}
-    }
-    isDatePickerOpen.value = false
-    doSearch()
-  },
-})
-
-const selectedDateLabel = computed(() => {
-  if (!filters.date) return '全部日期'
+function parseDateSafe(value) {
   try {
-    const [year, month, day] = filters.date.split('-')
-    return `${year}年${Number(month)}月${Number(day)}日`
+    return value ? parseDate(value) : undefined
   } catch {
-    return filters.date
+    return undefined
   }
+}
+
+// 区间日历的草稿值：只选了起点的中间态不写回 filters，避免半个区间触发查询
+const draftRange = ref({
+  start: parseDateSafe(filters.dateFrom),
+  end: parseDateSafe(filters.dateTo),
 })
 
-function clearDateFilter() {
-  filters.date = ''
+function syncDraftFromFilters() {
+  draftRange.value = {
+    start: parseDateSafe(filters.dateFrom),
+    end: parseDateSafe(filters.dateTo),
+  }
+  const anchor = parseDateSafe(filters.dateFrom) || parseDate(todayString)
+  calendarPlaceholder.value = anchor
+}
+
+function onDatePickerOpenChange(open) {
+  isDatePickerOpen.value = open
+  if (open) syncDraftFromFilters()
+}
+
+function applyDateRange(from, to) {
+  filters.dateFrom = from
+  filters.dateTo = to
+  syncDraftFromFilters()
   isDatePickerOpen.value = false
   doSearch()
 }
 
-function goToToday() {
-  filters.date = todayString
-  try {
-    calendarPlaceholder.value = parseDate(todayString)
-  } catch {}
-  isDatePickerOpen.value = false
-  doSearch()
+function onDraftRangeUpdate(value) {
+  const next = value || { start: undefined, end: undefined }
+  draftRange.value = next
+  // 起止都落定才提交查询；radix 首次点击只给 start
+  if (next.start && next.end) {
+    applyDateRange(next.start.toString(), next.end.toString())
+  }
 }
+
+function applyPreset(preset) {
+  const { from, to } = presetRange(preset)
+  applyDateRange(from, to)
+}
+
+// 当前区间正好等于某个预设时高亮左侧对应项（按钮上仍只显示真实日期）
+const activePresetKey = computed(() => {
+  if (!filters.dateFrom || !filters.dateTo) return ''
+  const hit = DATE_PRESETS.find((p) => {
+    const { from, to } = presetRange(p)
+    return from === filters.dateFrom && to === filters.dateTo
+  })
+  return hit ? hit.key : ''
+})
+
+// 按钮上始终是真实日期，不显示「今天」「近 7 天」这类预设名
+const selectedDateLabel = computed(() => {
+  const { dateFrom, dateTo } = filters
+  if (!dateFrom && !dateTo) return '选择采集日期'
+  if (dateFrom && !dateTo) return `${dateFrom} 起`
+  if (!dateFrom && dateTo) return `${dateTo} 前`
+  if (dateFrom === dateTo) return dateFrom
+  return `${dateFrom} ~ ${dateTo}`
+})
+
+// 导出文件名用的日期后缀：单日用当天，区间用「起_止」
+const exportDateSuffix = computed(() => {
+  if (!filters.dateFrom && !filters.dateTo) return todayString
+  if (filters.dateFrom && filters.dateTo) {
+    return filters.dateFrom === filters.dateTo
+      ? filters.dateFrom
+      : `${filters.dateFrom}_${filters.dateTo}`
+  }
+  return filters.dateFrom || filters.dateTo
+})
 
 function statusBadgeVariant(state) {
   if (state === '未演出' || state === 'upcoming') return 'default'
@@ -565,7 +635,8 @@ function buildQueryParams() {
   if (filters.city && filters.city !== 'all' && filters.city !== '全部') p.city = filters.city
   if (filters.category && filters.category !== 'all') p.category = filters.category
   if (filters.status && filters.status !== 'all') p.perf_state = filters.status
-  if (filters.date) p.date = filters.date
+  if (filters.dateFrom) p.date_from = filters.dateFrom
+  if (filters.dateTo) p.date_to = filters.dateTo
   return p
 }
 
@@ -604,7 +675,10 @@ function resetFilters() {
   filters.city = 'all'
   filters.category = 'all'
   filters.status = 'all'
-  filters.date = ''
+  // 回到默认态：只看今天采的
+  filters.dateFrom = todayString
+  filters.dateTo = todayString
+  syncDraftFromFilters()
   page.value = 1
   fetchShows()
 }
@@ -798,7 +872,8 @@ async function executeClear(scope) {
     if (filters.city !== 'all') payload.city = filters.city
     if (filters.category !== 'all') payload.category = filters.category
     if (filters.status !== 'all') payload.perf_state = filters.status
-    if (filters.date) payload.date = filters.date
+    if (filters.dateFrom) payload.date_from = filters.dateFrom
+    if (filters.dateTo) payload.date_to = filters.dateTo
   }
 
   try {
@@ -830,7 +905,8 @@ async function executeExport(scope) {
     if (filters.city !== 'all') p.city = filters.city
     if (filters.category !== 'all') p.category = filters.category
     if (filters.status !== 'all') p.perf_state = filters.status
-    if (filters.date) p.date = filters.date
+    if (filters.dateFrom) p.date_from = filters.dateFrom
+    if (filters.dateTo) p.date_to = filters.dateTo
   }
 
   const url = api.exportUrl('xlsx', p)
@@ -847,10 +923,9 @@ async function executeExport(scope) {
 
   // Tauri 桌面壳：WebView 不支持网页下载，走系统保存对话框后写盘
   try {
-    const day = filters.date || todayString
     const path = await save({
       title: '导出演出数据',
-      defaultPath: `演出数据_${day}.xlsx`,
+      defaultPath: `演出数据_${exportDateSuffix.value}.xlsx`,
       filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }],
     })
     if (!path) return // 用户取消保存
@@ -945,43 +1020,52 @@ defineExpose({ refresh, fetchShows, loadFacets })
 
         <!-- 右侧筛选与功能组 -->
         <div class="flex items-center gap-2 shrink-0 ml-auto">
-          <!-- 采集日期筛选 (Calendar 弹窗) -->
+          <!-- 采集日期筛选（快捷区间 + 自定义区间日历） -->
           <div class="shrink-0">
-            <Popover v-model:open="isDatePickerOpen">
+            <Popover :open="isDatePickerOpen" @update:open="onDatePickerOpenChange">
               <PopoverTrigger as-child>
                 <Button
                   variant="outline"
-                  class="h-8 min-w-[130px] justify-start gap-1.5 rounded-xl border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 shadow-2xs hover:border-[var(--primary)] hover:bg-white"
+                  class="h-8 min-w-[218px] justify-start gap-1.5 rounded-xl border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 shadow-2xs hover:border-[var(--primary)] hover:bg-white"
                 >
                   <CalendarDays class="h-3.5 w-3.5 text-[var(--primary)] shrink-0" />
                   <span class="truncate">{{ selectedDateLabel }}</span>
-                  <span
-                    v-if="filters.date"
-                    class="ml-auto text-slate-400 hover:text-slate-700 text-xs px-1 cursor-pointer transition-colors"
-                    title="清空日期筛选（查看全部）"
-                    @click.stop="clearDateFilter"
-                  >✕</span>
+                  <ChevronDown class="ml-auto h-3.5 w-3.5 text-slate-400 shrink-0" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent align="start" :side-offset="4" class="w-auto p-0">
-                <Calendar v-model="selectedDate" :placeholder="calendarPlaceholder" />
-                <div class="flex items-center justify-between border-t border-slate-100 px-3 py-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    class="h-7 px-2 text-xs text-slate-500 hover:text-slate-800 hover:bg-slate-50"
-                    @click="clearDateFilter"
-                  >
-                    全部日期
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    class="h-7 px-2 text-xs text-[var(--primary)] hover:bg-slate-50"
-                    @click="goToToday"
-                  >
-                    回到今天
-                  </Button>
+              <PopoverContent align="end" :side-offset="4" class="w-auto p-0 whitespace-normal">
+                <div class="flex items-stretch">
+                  <!-- 左侧快捷区间 -->
+                  <div class="flex w-[104px] shrink-0 flex-col gap-0.5 border-r border-slate-100 p-2">
+                    <button
+                      v-for="preset in DATE_PRESETS"
+                      :key="preset.key"
+                      type="button"
+                      class="rounded-lg px-2 py-1.5 text-left text-xs font-medium transition-colors"
+                      :class="activePresetKey === preset.key ? 'bg-[var(--primary-light)] text-[var(--primary)]' : 'text-slate-600 hover:bg-slate-50'"
+                      @click="applyPreset(preset)"
+                    >
+                      {{ preset.label }}
+                    </button>
+                  </div>
+
+                  <!-- 右侧自定义区间：点两次选起止 -->
+                  <div class="flex flex-col">
+                    <RangeCalendar
+                      :model-value="draftRange"
+                      :placeholder="calendarPlaceholder"
+                      @update:model-value="onDraftRangeUpdate"
+                      @update:placeholder="(v) => { calendarPlaceholder = v }"
+                    />
+                    <div class="border-t border-slate-100 px-3 py-2 text-[11px] text-slate-500">
+                      <template v-if="draftRange.start && !draftRange.end">
+                        已选起始 {{ draftRange.start.toString() }}，再点一天定为结束
+                      </template>
+                      <template v-else>
+                        当前区间：{{ selectedDateLabel }}
+                      </template>
+                    </div>
+                  </div>
                 </div>
               </PopoverContent>
             </Popover>

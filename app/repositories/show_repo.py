@@ -26,7 +26,9 @@ class ShowQuery:
     status: str | None = None
     perf_state: str | None = None  # 演出状态: upcoming/ongoing/done/cancelled
     keyword: str | None = None  # 标题模糊
-    date: str | None = None  # 采集日期（本地日历日 YYYY-MM-DD），按 crawled_at 过滤
+    date: str | None = None  # 采集日期单日（本地日历日 YYYY-MM-DD），按 crawled_at 过滤
+    date_from: str | None = None  # 采集日期区间起（含当日），本地日历日
+    date_to: str | None = None  # 采集日期区间止（含当日），本地日历日
     limit: int = 50
     offset: int = 0
 
@@ -49,6 +51,42 @@ _PERF_STATE_TIME_OP = {"upcoming": ">", "ongoing": "=", "done": "<"}
 # 不对外展示的演出大类：这两类不属于台账口径，查询/导出/筛选项一律排除。
 # 库里仍保留原始记录，只是查询层过滤，改动可逆。
 _EXCLUDED_CATEGORIES = LEDGER_HIDDEN_CATEGORIES
+
+
+def _local_day_start_utc(day: str) -> str | None:
+    """本地日历日的 00:00 → UTC naive ISO 串（与落库格式对齐）。解析失败返回 None。"""
+    try:
+        local_midnight = datetime.strptime(day, "%Y-%m-%d").astimezone()
+    except ValueError:
+        return None
+    return local_midnight.astimezone(UTC).replace(tzinfo=None).isoformat()
+
+
+def _crawled_at_range(
+    day_from: str | None, day_to: str | None
+) -> tuple[str | None, str | None]:
+    """采集日期区间（含端点的本地日历日）→ crawled_at 的 UTC 半开区间 [start, end)。
+
+    crawled_at 落库是 UTC，直接拿本地日期串比较会在 CST 的 00:00-08:00 漏计当天数据，
+    所以两端都先按本地墙钟日界换算成 UTC。单侧留空即该侧无界；
+    起止倒挂时自动交换，避免前端传反后查不出任何数据。
+    """
+    if day_from and day_to and day_from > day_to:
+        day_from, day_to = day_to, day_from
+    start = _local_day_start_utc(day_from) if day_from else None
+    end = None
+    if day_to:
+        try:
+            # 含右端点：取「次日 00:00」作为开区间上界。加天数用本地日历日再换算，
+            # 而非在带时区的时间戳上加 24h，避免夏令时地区偏移一小时。
+            next_day = (
+                datetime.strptime(day_to, "%Y-%m-%d") + timedelta(days=1)
+            ).strftime("%Y-%m-%d")
+        except ValueError:
+            next_day = None
+        if next_day:
+            end = _local_day_start_utc(next_day)
+    return start, end
 
 
 class ShowRepository:
@@ -136,23 +174,17 @@ class ShowRepository:
         if q.keyword:
             clauses.append("title LIKE ?")
             params.append(f"%{q.keyword}%")
-        # 采集日期过滤：把本地日历日换算成 UTC 起止后，按 crawled_at 区间比较。
-        # crawled_at 落库是 UTC，直接拿本地日期串比会在 CST 00:00-08:00 漏计当天数据。
-        if q.date:
-            try:
-                start_local = datetime.strptime(q.date, "%Y-%m-%d").astimezone()
-            except ValueError:
-                start_local = None
-            if start_local is not None:
-                start_utc = start_local.astimezone(UTC).replace(tzinfo=None).isoformat()
-                end_utc = (
-                    (start_local + timedelta(days=1))
-                    .astimezone(UTC)
-                    .replace(tzinfo=None)
-                    .isoformat()
-                )
-                clauses.append("crawled_at >= ? AND crawled_at < ?")
-                params.extend([start_utc, end_utc])
+        # 采集日期过滤：支持单日（date）与区间（date_from / date_to，含端点）。
+        # date 等价于 date_from == date_to == date；区间参数在同传时优先。
+        start_utc, end_utc = _crawled_at_range(
+            q.date_from or q.date, q.date_to or q.date
+        )
+        if start_utc:
+            clauses.append("crawled_at >= ?")
+            params.append(start_utc)
+        if end_utc:
+            clauses.append("crawled_at < ?")
+            params.append(end_utc)
         # 排除不对外展示的大类（展览休闲 / 体育）；NULL 分类保留
         if _EXCLUDED_CATEGORIES:
             placeholders = ",".join("?" for _ in _EXCLUDED_CATEGORIES)
