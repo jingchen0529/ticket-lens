@@ -162,12 +162,25 @@ function applyDateRange(from, to) {
 }
 
 function onDraftRangeUpdate(value) {
-  const next = value || { start: undefined, end: undefined }
-  draftRange.value = next
-  // 起止都落定才提交查询；radix 首次点击只给 start
-  if (next.start && next.end) {
-    applyDateRange(next.start.toString(), next.end.toString())
-  }
+  draftRange.value = value || { start: undefined, end: undefined }
+}
+
+function handleConfirmDateRange() {
+  if (!draftRange.value?.start) return
+  const from = draftRange.value.start.toString()
+  const to = (draftRange.value.end || draftRange.value.start).toString()
+  applyDateRange(from, to)
+}
+
+function handleQuickToday() {
+  const today = parseDateSafe(todayString)
+  draftRange.value = { start: today, end: today }
+  applyDateRange(todayString, todayString)
+}
+
+function handleCancelDatePicker() {
+  syncDraftFromFilters()
+  isDatePickerOpen.value = false
 }
 
 function applyPreset(preset) {
@@ -177,10 +190,12 @@ function applyPreset(preset) {
 
 // 当前区间正好等于某个预设时高亮左侧对应项（按钮上仍只显示真实日期）
 const activePresetKey = computed(() => {
-  if (!filters.dateFrom || !filters.dateTo) return ''
+  const fromStr = draftRange.value?.start?.toString() || filters.dateFrom
+  const toStr = draftRange.value?.end?.toString() || (draftRange.value?.start ? fromStr : filters.dateTo)
+  if (!fromStr || !toStr) return ''
   const hit = DATE_PRESETS.find((p) => {
     const { from, to } = presetRange(p)
-    return from === filters.dateFrom && to === filters.dateTo
+    return from === fromStr && to === toStr
   })
   return hit ? hit.key : ''
 })
@@ -1033,23 +1048,23 @@ defineExpose({ refresh, fetchShows, loadFacets })
                   <ChevronDown class="ml-auto h-3.5 w-3.5 text-slate-400 shrink-0" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent align="end" :side-offset="4" class="w-auto p-0 whitespace-normal">
+              <PopoverContent align="end" :side-offset="4" class="w-auto p-0 whitespace-normal shadow-lg border border-slate-200 rounded-xl overflow-hidden bg-white">
                 <div class="flex items-stretch">
                   <!-- 左侧快捷区间 -->
-                  <div class="flex w-[104px] shrink-0 flex-col gap-0.5 border-r border-slate-100 p-2">
+                  <div class="flex w-[108px] shrink-0 flex-col gap-0.5 border-r border-slate-100 p-2 bg-slate-50/50">
                     <button
                       v-for="preset in DATE_PRESETS"
                       :key="preset.key"
                       type="button"
-                      class="rounded-lg px-2 py-1.5 text-left text-xs font-medium transition-colors"
-                      :class="activePresetKey === preset.key ? 'bg-[var(--primary-light)] text-[var(--primary)]' : 'text-slate-600 hover:bg-slate-50'"
+                      class="rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition-colors cursor-pointer"
+                      :class="activePresetKey === preset.key ? 'bg-[var(--primary-light,#fde8f3)] text-[var(--primary)] font-semibold' : 'text-slate-600 hover:bg-slate-100/80'"
                       @click="applyPreset(preset)"
                     >
                       {{ preset.label }}
                     </button>
                   </div>
 
-                  <!-- 右侧自定义区间：点两次选起止 -->
+                  <!-- 右侧自定义区间 -->
                   <div class="flex flex-col">
                     <RangeCalendar
                       :model-value="draftRange"
@@ -1057,13 +1072,44 @@ defineExpose({ refresh, fetchShows, loadFacets })
                       @update:model-value="onDraftRangeUpdate"
                       @update:placeholder="(v) => { calendarPlaceholder = v }"
                     />
-                    <div class="border-t border-slate-100 px-3 py-2 text-[11px] text-slate-500">
-                      <template v-if="draftRange.start && !draftRange.end">
-                        已选起始 {{ draftRange.start.toString() }}，再点一天定为结束
-                      </template>
-                      <template v-else>
-                        当前区间：{{ selectedDateLabel }}
-                      </template>
+                    <!-- 底部操作栏 -->
+                    <div class="flex items-center justify-between border-t border-slate-100 bg-slate-50/60 px-3 py-2 text-xs">
+                      <div class="text-[11px] text-slate-500 max-w-[200px] truncate">
+                        <template v-if="draftRange.start && !draftRange.end">
+                          已选起始：<span class="font-medium text-slate-700">{{ draftRange.start.toString() }}</span>
+                        </template>
+                        <template v-else-if="draftRange.start && draftRange.end">
+                          已选区间：<span class="font-medium text-slate-700">{{ draftRange.start.toString() === draftRange.end.toString() ? draftRange.start.toString() : `${draftRange.start.toString()} ~ ${draftRange.end.toString()}` }}</span>
+                        </template>
+                        <template v-else>
+                          请在日历上点击选择
+                        </template>
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          class="rounded-md px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200/70 transition-colors cursor-pointer"
+                          @click="handleQuickToday"
+                        >
+                          今天
+                        </button>
+                        <button
+                          type="button"
+                          class="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
+                          @click="handleCancelDatePicker"
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          class="rounded-md px-2.5 py-1 text-xs font-medium text-white shadow-xs transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                          :style="{ backgroundColor: 'var(--primary)' }"
+                          :disabled="!draftRange.start"
+                          @click="handleConfirmDateRange"
+                        >
+                          确定
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>

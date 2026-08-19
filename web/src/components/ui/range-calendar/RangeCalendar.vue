@@ -67,6 +67,8 @@ const NAV_BUTTON_CLASS =
     :max-value="maxValue"
     :min-value="minValue"
     :class="cn('flex divide-x divide-slate-100', props.class)"
+    @update:model-value="emit('update:modelValue', $event)"
+    @update:placeholder="emit('update:placeholder', $event)"
   >
     <template #default="{ grid, weekDays }">
       <div
