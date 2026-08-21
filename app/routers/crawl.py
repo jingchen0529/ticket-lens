@@ -27,10 +27,10 @@ router = APIRouter(prefix="/api/crawl")
 class CrawlRequest(BaseModel):
     """前端提交的采集参数。不传的字段回退配置文件默认值。"""
 
-    sources: list[str] = Field(default_factory=lambda: ["damai", "maoyan"])
+    sources: list[str] = Field(default_factory=lambda: ["damai", "maoyan", "showstart"])
     cities: Optional[list[str]] = None
     keywords: Optional[list[str]] = None
-    # 单平台分类；大麦对应 ctl，猫眼对应 categoryId；空值表示全部分类。
+    # 单平台分类；大麦对应 ctl，猫眼对应 categoryId，秀动对应 showStyle；空值表示全部分类。
     category: str = Field(default="", max_length=50)
     # 每个城市/关键词最多翻页数。
     # None / 0 = 不限制，跟大麦 totalPage 采完全部；正整数 = 硬上限。
@@ -46,15 +46,17 @@ def _parse_sources(sources: list[str]) -> list[SourcePlatform]:
     for s in sources:
         key = s.strip().lower()
         if key in ("all", ""):
-            return [SourcePlatform.DAMAI, SourcePlatform.MAOYAN]
+            return [SourcePlatform.DAMAI, SourcePlatform.MAOYAN, SourcePlatform.SHOWSTART]
         if key in ("damai", "大麦"):
             out.append(SourcePlatform.DAMAI)
         elif key in ("maoyan", "猫眼"):
             out.append(SourcePlatform.MAOYAN)
+        elif key in ("showstart", "秀动"):
+            out.append(SourcePlatform.SHOWSTART)
         else:
             raise HTTPException(status_code=400, detail=f"未知数据源: {s}")
     if not out:
-        return [SourcePlatform.DAMAI, SourcePlatform.MAOYAN]
+        return [SourcePlatform.DAMAI, SourcePlatform.MAOYAN, SourcePlatform.SHOWSTART]
     return out
 
 

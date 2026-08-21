@@ -28,8 +28,10 @@ ItemsCallback = Callable[[list[RawShowItem]], Awaitable[None] | None]
 
 class BaseCrawler(abc.ABC):
     source: SourcePlatform
+    # Browser-backed by default; pure HTTP sources override this to skip Playwright startup.
+    requires_browser: bool = True
 
-    def __init__(self, session: BrowserSession, config: AppConfig) -> None:
+    def __init__(self, session: BrowserSession | None, config: AppConfig) -> None:
         self.session = session
         self.config = config
         self.log = logging.getLogger(f"crawler.{self.source.value}")

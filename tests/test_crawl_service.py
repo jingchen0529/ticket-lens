@@ -79,6 +79,41 @@ async def test_run_crawl_keeps_legacy_crawler_callback_signature(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_run_crawl_showstart_skips_browser_session(monkeypatch, tmp_path):
+    config = AppConfig()
+    config.storage.backend = "sqlite"
+    config.storage.db_path = str(tmp_path / "showstart.sqlite3")
+    config.storage.output_dir = str(tmp_path)
+    config.storage.run_subdir = False
+    job = CrawlJob(sources=[SourcePlatform.SHOWSTART], cities=["北京"], max_pages=1)
+    raw = RawShowItem(
+        source=SourcePlatform.SHOWSTART,
+        source_id="showstart-1",
+        title="秀动现场",
+        start_time_raw="2026/09/03 20:00",
+    )
+
+    class StubCrawler:
+        requires_browser = False
+
+        async def crawl(self, **_kwargs):
+            return [raw]
+
+    def forbidden_browser_session(*_args, **_kwargs):
+        raise AssertionError("showstart must not start Playwright")
+
+    monkeypatch.setattr(crawl_service, "browser_session", forbidden_browser_session)
+    monkeypatch.setattr(crawl_service, "get_crawler_class", lambda _src: StubCrawler)
+    monkeypatch.setattr(crawl_service, "get_crawler", lambda *_args: StubCrawler())
+
+    result = await crawl_service.run_crawl(job, config)
+
+    assert result.errors == []
+    assert result.raw_count == 1
+    assert result.by_source == {"showstart": 1}
+
+
+@pytest.mark.asyncio
 async def test_run_crawl_persists_split_rows_before_crawler_finishes(monkeypatch, tmp_path):
     config = AppConfig()
     config.storage.backend = "sqlite"

@@ -57,6 +57,8 @@ def _module_name(logger_name: str, text: str) -> str:
         return "大麦网采集"
     if "maoyan" in blob:
         return "猫眼采集"
+    if "showstart" in blob:
+        return "秀动采集"
     if "browser" in blob or "playwright" in blob:
         return "浏览器模块"
     if "storage" in blob or "sqlite" in blob:

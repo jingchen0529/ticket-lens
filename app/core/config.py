@@ -122,6 +122,12 @@ class SourcesConfig(BaseModel):
             list_url="https://show.maoyan.com/qqw#/list",
         )
     )
+    showstart: SourceEndpointConfig = Field(
+        default_factory=lambda: SourceEndpointConfig(
+            base_url="https://www.showstart.com",
+            list_url="https://www.showstart.com/event/list",
+        )
+    )
 
 
 class StorageConfig(BaseModel):

@@ -19,7 +19,7 @@ from app.utils.logging import setup_logging
 
 app = typer.Typer(
     name="daxi",
-    help="大麦 / 猫眼演出数据采集工具",
+    help="大麦 / 猫眼 / 秀动演出数据采集工具",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -29,15 +29,17 @@ console = Console()
 def _parse_sources(sources: str) -> list[SourcePlatform]:
     parts = [p.strip().lower() for p in sources.split(",") if p.strip()]
     if not parts or "all" in parts:
-        return [SourcePlatform.DAMAI, SourcePlatform.MAOYAN]
+        return [SourcePlatform.DAMAI, SourcePlatform.MAOYAN, SourcePlatform.SHOWSTART]
     out: list[SourcePlatform] = []
     for p in parts:
         if p in ("damai", "大麦"):
             out.append(SourcePlatform.DAMAI)
         elif p in ("maoyan", "猫眼"):
             out.append(SourcePlatform.MAOYAN)
+        elif p in ("showstart", "秀动"):
+            out.append(SourcePlatform.SHOWSTART)
         else:
-            raise typer.BadParameter(f"未知源: {p}，可选 damai,maoyan,all")
+            raise typer.BadParameter(f"未知源: {p}，可选 damai,maoyan,showstart,all")
     return out
 
 
@@ -91,7 +93,7 @@ def crawl(
         "all",
         "--sources",
         "-s",
-        help="数据源：damai,maoyan,all",
+        help="数据源：damai,maoyan,showstart,all",
     ),
     city: Optional[list[str]] = typer.Option(
         None,
@@ -108,7 +110,7 @@ def crawl(
     category: str = typer.Option(
         "",
         "--category",
-        help="单平台分类（如大麦话剧歌剧、猫眼话剧音乐剧）；不传则抓全部分类",
+        help="单平台分类（如大麦话剧歌剧、猫眼话剧音乐剧、秀动爵士）；不传则抓全部分类",
     ),
     max_pages: Optional[int] = typer.Option(
         None,
@@ -285,7 +287,15 @@ def captcha_test(
         from app.crawlers.registry import get_crawler
         from app.models import SourcePlatform
 
-        src = SourcePlatform.DAMAI if source in ("damai", "大麦") else SourcePlatform.MAOYAN
+        source_key = source.strip().lower()
+        if source_key in ("damai", "大麦"):
+            src = SourcePlatform.DAMAI
+        elif source_key in ("maoyan", "猫眼"):
+            src = SourcePlatform.MAOYAN
+        else:
+            raise typer.BadParameter(
+                "captcha-test 仅支持 damai|maoyan（showstart 为纯 HTTP 无验证码）"
+            )
         platform_captcha = cfg.captcha_for(src.value)
         run_cfg = cfg.model_copy(deep=True)
         run_cfg.captcha = platform_captcha

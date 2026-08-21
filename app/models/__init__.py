@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 class SourcePlatform(str, Enum):
     DAMAI = "damai"
     MAOYAN = "maoyan"
+    SHOWSTART = "showstart"
 
 
 class ShowStatus(str, Enum):
@@ -143,11 +144,15 @@ class CrawlJob(BaseModel):
     """一次采集任务描述。"""
 
     sources: list[SourcePlatform] = Field(
-        default_factory=lambda: [SourcePlatform.DAMAI, SourcePlatform.MAOYAN]
+        default_factory=lambda: [
+            SourcePlatform.DAMAI,
+            SourcePlatform.MAOYAN,
+            SourcePlatform.SHOWSTART,
+        ]
     )
     cities: list[str] = Field(default_factory=lambda: ["北京"])
     keywords: list[str] = Field(default_factory=list)
-    # 单平台分类；大麦映射 ctl，猫眼映射 categoryId；空字符串 = 全部分类。
+    # 单平台分类；大麦映射 ctl，猫眼映射 categoryId，秀动映射 showStyle；空字符串 = 全部分类。
     # 多平台任务不共享分类体系，必须为空。
     category: str = ""
     # 每个城市/关键词页数上限；0 = 不限制（跟列表 totalPage 采完）

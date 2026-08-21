@@ -359,8 +359,8 @@ class ShowRepository:
                 except Exception:
                     out[field] = []
 
-            # 预设平台：包含大麦网(damai)与猫眼(maoyan)
-            for s in ("damai", "maoyan"):
+            # 预设平台：大麦、猫眼、秀动即使暂时无数据也可筛选。
+            for s in ("damai", "maoyan", "showstart"):
                 if s not in out["source"]:
                     out["source"].append(s)
 

@@ -61,6 +61,18 @@ def test_unknown_source_400():
         assert "youku" in r.json()["detail"]
 
 
+def test_showstart_aliases_and_all_sources():
+    from app.routers.crawl import _parse_sources
+
+    assert _parse_sources(["showstart"]) == [SourcePlatform.SHOWSTART]
+    assert _parse_sources(["秀动"]) == [SourcePlatform.SHOWSTART]
+    assert _parse_sources(["all"]) == [
+        SourcePlatform.DAMAI,
+        SourcePlatform.MAOYAN,
+        SourcePlatform.SHOWSTART,
+    ]
+
+
 def test_max_pages_zero_and_null_mean_all(monkeypatch):
     """不传 / 0 → 全量（job.max_pages=0），不再回退配置 3 页。"""
     import app.services.crawl_jobs as cj
