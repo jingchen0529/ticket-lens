@@ -154,3 +154,162 @@ def test_incomplete_recrawl_with_same_sessions_cannot_drop_ticket_tiers(tmp_path
 
     assert len(orjson.loads(show_payload)["sessions"][0]["ticket_tiers"]) == 2
     assert len(orjson.loads(raw_payload)["sessions_raw"][0]["ticket_tiers"]) == 2
+
+
+def test_recrawl_keeps_first_crawled_at_but_updates_content(tmp_path):
+    """重采同一演出时保留首次采集时间 crawled_at，内容更新为新值。"""
+    from datetime import datetime, timezone
+
+    storage = SqliteStorage(tmp_path)
+
+    first = _raw("keep-ts", title="首次标题")
+    first.crawled_at = datetime(2026, 8, 17, 4, 0, 0, tzinfo=timezone.utc)
+    first_show = normalize_one(first)
+    assert first_show is not None
+    storage.save_shows([first_show])
+
+    second = _raw("keep-ts", title="重采标题")
+    second.crawled_at = datetime(2026, 8, 21, 4, 0, 0, tzinfo=timezone.utc)
+    second_show = normalize_one(second)
+    assert second_show is not None
+    storage.save_shows([second_show])
+
+    with sqlite3.connect(storage.db_path) as conn:
+        row = conn.execute(
+            "SELECT title, crawled_at, normalized_at FROM shows WHERE source_id = ?",
+            ("keep-ts",),
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == "重采标题"  # 内容已更新
+    assert row[1].startswith("2026-08-17")  # 首次采集时间保留
+    assert row[2].startswith("2026-08-21")  # 最近规范化时间更新
+
+
+def test_recrawl_removes_orphan_split_rows_when_sessions_shrink(tmp_path):
+    """场次变少时清理旧的高序号拆分行，保留的行走冲突更新。"""
+    storage = SqliteStorage(tmp_path)
+
+    full = _raw("shrink", title="多场变少场")
+    full.sessions_raw = [
+        {"id": "s1", "start_time": "2026-08-01 15:00", "date_key": "20260801"},
+        {"id": "s2", "start_time": "2026-08-02 19:30", "date_key": "20260802"},
+        {"id": "s3", "start_time": "2026-08-03 19:30", "date_key": "20260803"},
+    ]
+    full.raw_payload = {"detail": {"detail_complete": True}}
+    full_show = normalize_one(full)
+    assert full_show is not None
+    storage.save_shows([full_show])
+
+    with sqlite3.connect(storage.db_path) as conn:
+        before = conn.execute(
+            "SELECT id FROM shows WHERE source_id = ? ORDER BY id",
+            ("shrink",),
+        ).fetchall()
+    assert len(before) == 3
+
+    shrink = _raw("shrink", title="多场变少场")
+    shrink.sessions_raw = [
+        {"id": "s1", "start_time": "2026-08-01 15:00", "date_key": "20260801"},
+    ]
+    shrink.raw_payload = {"detail": {"detail_complete": True}}
+    shrink_show = normalize_one(shrink)
+    assert shrink_show is not None
+    storage.save_shows([shrink_show])
+
+    with sqlite3.connect(storage.db_path) as conn:
+        after = conn.execute(
+            "SELECT id FROM shows WHERE source_id = ? ORDER BY id",
+            ("shrink",),
+        ).fetchall()
+    assert len(after) == 1
+    # 单场次聚合 show 的 id 不带序号后缀（防御拆分只拆多场次）
+    assert after[0][0] in ("damai:shrink", "damai:shrink:1")
+
+
+def test_identical_recrawl_skips_write_entirely(tmp_path):
+    """完全重复（仅时间戳不同）的采集不产生任何写入：内容、时间戳全部保持原样。"""
+    from datetime import datetime, timezone
+
+    storage = SqliteStorage(tmp_path)
+
+    first = _raw("noop", title="重复演出")
+    first.start_time_raw = "2026-09-01 19:30"
+    first.sessions_raw = [
+        {"id": "s1", "start_time": "2026-09-01 19:30", "date_key": "20260901"}
+    ]
+    first.crawled_at = datetime(2026, 8, 17, 4, 0, 0, tzinfo=timezone.utc)
+    first_show = normalize_one(first)
+    assert first_show is not None
+    storage.save_shows([first_show])
+
+    with sqlite3.connect(storage.db_path) as conn:
+        before = conn.execute(
+            "SELECT title, crawled_at, normalized_at FROM shows WHERE source_id = ?",
+            ("noop",),
+        ).fetchone()
+
+    # 21 号完全重复采集：内容不变，仅 crawled_at/normalized_at 不同
+    dup = _raw("noop", title="重复演出")
+    dup.start_time_raw = "2026-09-01 19:30"
+    dup.sessions_raw = [
+        {"id": "s1", "start_time": "2026-09-01 19:30", "date_key": "20260901"}
+    ]
+    dup.crawled_at = datetime(2026, 8, 21, 4, 0, 0, tzinfo=timezone.utc)
+    dup_show = normalize_one(dup)
+    assert dup_show is not None
+    storage.save_shows([dup_show])
+
+    with sqlite3.connect(storage.db_path) as conn:
+        after = conn.execute(
+            "SELECT title, crawled_at, normalized_at FROM shows WHERE source_id = ?",
+            ("noop",),
+        ).fetchone()
+
+    assert after == before  # 完全重复：行一个字节都没变（含 normalized_at）
+
+
+def test_changed_recrawl_updates_content_keeps_first_crawled_at(tmp_path):
+    """有内容变化（如价格/状态）的重采：只更新内容，首次采集时间保留。"""
+    from datetime import datetime, timezone
+
+    storage = SqliteStorage(tmp_path)
+
+    first = _raw("chg", title="价格变化演出")
+    first.start_time_raw = "2026-09-01 19:30"
+    first.sessions_raw = [
+        {
+            "id": "s1",
+            "start_time": "2026-09-01 19:30",
+            "date_key": "20260901",
+            "ticket_tiers": [{"sku_id": "a", "price": 100}],
+        }
+    ]
+    first.crawled_at = datetime(2026, 8, 17, 4, 0, 0, tzinfo=timezone.utc)
+    first_show = normalize_one(first)
+    assert first_show is not None
+    storage.save_shows([first_show])
+
+    changed = _raw("chg", title="价格变化演出")
+    changed.start_time_raw = "2026-09-01 19:30"
+    changed.sessions_raw = [
+        {
+            "id": "s1",
+            "start_time": "2026-09-01 19:30",
+            "date_key": "20260901",
+            "ticket_tiers": [{"sku_id": "a", "price": 180}],
+        }
+    ]
+    changed.crawled_at = datetime(2026, 8, 21, 4, 0, 0, tzinfo=timezone.utc)
+    changed_show = normalize_one(changed)
+    assert changed_show is not None
+    storage.save_shows([changed_show])
+
+    with sqlite3.connect(storage.db_path) as conn:
+        row = conn.execute(
+            "SELECT min_price, crawled_at FROM shows WHERE source_id = ?",
+            ("chg",),
+        ).fetchone()
+
+    assert row[0] == 180.0  # 内容已更新为新价格
+    assert row[1].startswith("2026-08-17")  # 首次采集时间保留

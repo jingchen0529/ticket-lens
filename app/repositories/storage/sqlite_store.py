@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import orjson
 
@@ -228,15 +229,39 @@ class SqliteStorage(Storage):
             if show.source_id:
                 incoming_by_key.setdefault((show.source.value, show.source_id), []).append(show)
 
+        # 预读本批涉及演出的现有行（含旧拆分行）：同时服务「防劣化保护」
+        # 与「完全重复跳过写入」。比较时剔除 crawled_at/normalized_at——
+        # 重采必然带新时间戳，业务内容完全相同的行不应产生任何写入动作。
+        existing_by_id: dict[str, str] = {}
+        existing_by_key: dict[tuple[str, str], list[str]] = {}
+        if incoming_by_key:
+            conds = " OR ".join(
+                "(source = ? AND source_id = ?)" for _ in incoming_by_key
+            )
+            params: list[str] = []
+            for source, source_id in incoming_by_key:
+                params.extend([source, source_id])
+            for row_id, source, source_id, payload in self._conn.execute(
+                f"SELECT id, source, source_id, payload FROM shows WHERE {conds}",
+                params,
+            ):
+                existing_by_id[str(row_id)] = str(payload)
+                existing_by_key.setdefault((str(source), str(source_id)), []).append(
+                    str(payload)
+                )
+
+        def content_key(payload: str) -> dict[str, Any]:
+            data = orjson.loads(payload)
+            data.pop("crawled_at", None)
+            data.pop("normalized_at", None)
+            return data
+
         protected_keys: set[tuple[str, str]] = set()
         for key, incoming in incoming_by_key.items():
-            existing_rows = self._conn.execute(
-                "SELECT payload FROM shows WHERE source = ? AND source_id = ?",
-                key,
-            ).fetchall()
-            if not existing_rows:
+            existing_payloads = existing_by_key.get(key) or []
+            if not existing_payloads:
                 continue
-            old_quality = self._show_payload_quality([str(row[0]) for row in existing_rows])
+            old_quality = self._show_payload_quality(existing_payloads)
             new_quality = self._show_payload_quality(
                 [orjson.dumps(show.model_dump(mode="json")).decode() for show in incoming]
             )
@@ -264,7 +289,14 @@ class SqliteStorage(Storage):
                 if (show.source.value, show.source_id) not in protected_keys
             ]
         rows = []
+        skipped_unchanged = 0
         for s in shows:
+            payload = orjson.dumps(s.model_dump(mode="json")).decode()
+            old = existing_by_id.get(s.id)
+            if old is not None and content_key(old) == content_key(payload):
+                # 与库中内容完全一致（仅时间戳不同）→ 不入库，保持原行原样。
+                skipped_unchanged += 1
+                continue
             rows.append(
                 (
                     s.id,
@@ -280,19 +312,29 @@ class SqliteStorage(Storage):
                     s.start_time.isoformat() if s.start_time else None,
                     s.url,
                     s.poster_url,
-                    orjson.dumps(s.model_dump(mode="json")).decode(),
+                    payload,
                     s.crawled_at.isoformat() if s.crawled_at else None,
                     s.normalized_at.isoformat() if s.normalized_at else None,
                 )
             )
+        if skipped_unchanged:
+            logger.info("sqlite save_shows skipped %s unchanged rows", skipped_unchanged)
         # 一条演出会按场次拆成多行（id = source:source_id:序号）。重采时若场次
-        # 变少，纯 upsert 会让旧的高序号拆分行残留成孤儿。改为先按本批出现的
-        # (source, source_id) 删掉该演出的所有旧拆分行，再整体重插。
-        keyed = {(s.source.value, s.source_id) for s in shows if s.source_id}
-        if keyed:
-            self._conn.executemany(
-                "DELETE FROM shows WHERE source = ? AND source_id = ?",
-                list(keyed),
+        # 变少，纯 upsert 会让旧的高序号拆分行残留成孤儿：只删除本批不再出现的
+        # 拆分行，仍存在的行保留（ON CONFLICT 不覆盖 crawled_at，保住首次采集
+        # 时间；否则重采会把历史数据全部归到今天，按采集日期查询/导出失真）。
+        ids_by_key: dict[tuple[str, str], list[str]] = {}
+        for s in shows:
+            if s.source_id:
+                ids_by_key.setdefault((s.source.value, s.source_id), []).append(s.id)
+        for (source, source_id), ids in ids_by_key.items():
+            if not ids:
+                continue
+            placeholders = ",".join("?" for _ in ids)
+            self._conn.execute(
+                f"DELETE FROM shows WHERE source = ? AND source_id = ? "
+                f"AND id NOT IN ({placeholders})",
+                (source, source_id, *ids),
             )
         self._conn.executemany(
             """
