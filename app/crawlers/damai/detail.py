@@ -675,6 +675,39 @@ def _perform_begin_to_raw(begin: str | None, name: str | None) -> str:
     return s
 
 
+def _is_discounted_tier(sku: dict[str, Any]) -> bool:
+    """非正价票档不参与主票价统计。
+
+    口径（客户确认）：
+    - 优惠/折扣/特惠/促销/「打X折」票档：折后价不是正价，排除；
+    - 双人/多人/套票：价格是多人总价，与单张票价口径不一致，排除；
+    - 早鸟票：促销优惠价，排除；
+    - 「50元(二层两侧座位对区不对号)」这类低价正价票：保留（位置差，
+      但就是单张正价）。
+    """
+    name = clean_text(str(sku.get("priceName") or ""))
+    if any(
+        marker in name
+        for marker in (
+            "优惠",
+            "折扣",
+            "特惠",
+            "促销",
+            "折后",
+            "早鸟",
+            "双人",
+            "两人",
+            "三人",
+            "四人",
+            "多人",
+            "套票",
+            "家庭票",
+        )
+    ):
+        return True
+    return re.search(r"打\s*\d+(?:\.\d+)?\s*折", name) is not None
+
+
 def _session_from_perform_view(pv: dict[str, Any], skus: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     name = str(pv.get("performName") or pv.get("mainText") or "")
     begin = str(pv.get("performBeginDTStr") or "")
@@ -683,9 +716,12 @@ def _session_from_perform_view(pv: dict[str, Any], skus: list[dict[str, Any]] | 
     for sku in skus or []:
         if not isinstance(sku, dict):
             continue
-        # 尝试多个价格字段；大麦不同接口版本字段名不同
+        if _is_discounted_tier(sku):
+            continue
+        # 尝试多个价格字段；大麦不同接口版本字段名不同。
+        # 原价字段优先：salePrice 可能是折后价（优惠票档），只在无原价时兜底。
         price_value: Any = None
-        for field in ("price", "salePrice", "priceValue", "skuPrice", "dashPrice"):
+        for field in ("price", "priceValue", "skuPrice", "dashPrice", "salePrice"):
             candidate = sku.get(field)
             if candidate not in (None, ""):
                 price_value = candidate

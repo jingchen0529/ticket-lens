@@ -519,3 +519,81 @@ async def test_damai_deduplicates_projects_before_detail_fetch(monkeypatch):
         "音乐会",
         "音乐会",
     ]
+
+
+def test_damai_city_matches_normalizes_suffix():
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+    assert crawler._city_matches({"cityname": "北京"}, "北京")
+    assert crawler._city_matches({"cityName": "北京市"}, "北京")
+    assert crawler._city_matches({"city": "上海"}, "上海市")
+    assert not crawler._city_matches({"cityname": "长沙"}, "北京")
+    assert not crawler._city_matches({"cityName": "桂林市"}, "北京")
+    # 记录无城市字段时不拦截（回退到请求城市）
+    assert crawler._city_matches({}, "北京")
+    assert crawler._city_matches({"venue": "某某场馆"}, "北京")
+
+
+def test_damai_parse_api_payload_drops_cross_city_records(caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="crawler.damai")
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+    payload = {
+        "data": {
+            "pageData": {
+                "resultData": [
+                    {
+                        "projectid": "1",
+                        "nameNoHtml": "北京本地演出",
+                        "cityname": "北京",
+                    },
+                    {
+                        "projectid": "2",
+                        "nameNoHtml": "湖南红星相声社 | 沉浸式传统茶馆相声",
+                        "cityname": "长沙",
+                    },
+                    {
+                        "projectid": "3",
+                        "nameNoHtml": "无城市字段项目",
+                    },
+                ]
+            }
+        }
+    }
+    items = crawler._parse_api_payload(payload, city="北京")
+
+    assert [item.source_id for item in items] == ["1", "3"]
+    assert "damai skip cross-city" in caplog.text
+    assert "长沙" in caplog.text
+
+
+def test_damai_theme_category_goes_to_tn_not_ctl():
+    """儿童亲子等主题频道必须走 tn 参数（官网首页导航实测，ctl 无效返回空）。"""
+    crawler = DamaiCrawler(_DummySession(), AppConfig())  # type: ignore[arg-type]
+
+    assert crawler._category_params("儿童亲子") == ("", "儿童亲子")
+    assert crawler._category_params("二次元") == ("", "二次元")
+    assert crawler._category_params("话剧歌剧") == ("话剧歌剧", "")
+    assert crawler._category_params("") == ("", "")
+
+    search_query = parse_qs(
+        urlparse(crawler._build_search_url("北京", "", 2, "儿童亲子")).query,
+        keep_blank_values=True,
+    )
+    ajax_query = parse_qs(
+        urlparse(crawler._build_ajax_url("北京", "", 2, "儿童亲子")).query,
+        keep_blank_values=True,
+    )
+
+    assert search_query["tn"] == ["儿童亲子"]
+    assert search_query["ctl"] == [""]
+    assert ajax_query["tn"] == ["儿童亲子"]
+    assert ajax_query["ctl"] == [""]
+
+    # 类目分类保持原行为：走 ctl，tn 为空
+    ajax_cat = parse_qs(
+        urlparse(crawler._build_ajax_url("北京", "", 2, "演唱会")).query,
+        keep_blank_values=True,
+    )
+    assert ajax_cat["ctl"] == ["演唱会"]
+    assert ajax_cat["tn"] == [""]

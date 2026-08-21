@@ -1764,3 +1764,55 @@ def test_detail_retry_defaults_are_fixed_and_non_blocking():
     assert config.detail_punish_retry_cooldown_min_seconds == 240
     assert config.detail_punish_retry_cooldown_max_seconds == 360
     assert config.detail_punish_max_cooldowns == 2
+
+
+def test_session_tiers_prefer_original_price_over_sale_price():
+    from app.crawlers.damai.detail import _session_from_perform_view
+
+    pv = {"performName": "2026-09-01 19:30", "performBeginDTStr": "202609011930"}
+    skus = [
+        {"skuId": "s1", "priceName": "180元", "price": "180", "salePrice": "90"},
+        {"skuId": "s2", "priceName": "280元", "price": "280"},
+    ]
+    session = _session_from_perform_view(pv, skus)
+    prices = [t["price"] for t in session["ticket_tiers"]]
+    assert prices == [180.0, 280.0]
+
+
+def test_session_tiers_skip_non_regular_price_names():
+    from app.crawlers.damai.detail import _is_discounted_tier, _session_from_perform_view
+
+    # 排除：优惠/折扣/促销/打X折
+    assert _is_discounted_tier({"priceName": "优惠票"})
+    assert _is_discounted_tier({"priceName": "限时折扣"})
+    assert _is_discounted_tier({"priceName": "特惠票"})
+    assert _is_discounted_tier({"priceName": "促销价"})
+    assert _is_discounted_tier({"priceName": "100元票价打5折"})
+    # 排除：双人/多人/套票（多人总价，口径不一致）
+    assert _is_discounted_tier({"priceName": "双人套票（2人）"})
+    assert _is_discounted_tier({"priceName": "双人票"})
+    assert _is_discounted_tier({"priceName": "三人票"})
+    assert _is_discounted_tier({"priceName": "多人票"})
+    assert _is_discounted_tier({"priceName": "家庭票"})
+    # 排除：早鸟（促销优惠价）
+    assert _is_discounted_tier({"priceName": "单人早鸟票"})
+    # 保留：正价票，包括低价位置差的票（客户明确要求）
+    assert not _is_discounted_tier({"priceName": "180元"})
+    assert not _is_discounted_tier({"priceName": "50元(二层两侧座位对区不对号)"})
+    assert not _is_discounted_tier({"priceName": "80元(二层)"})
+
+    pv = {"performName": "2026-09-01 19:30", "performBeginDTStr": "202609011930"}
+    skus = [
+        {"skuId": "s1", "priceName": "100元", "price": "100"},
+        # 5 折优惠票档：折后 50，不应进入主票价统计
+        {"skuId": "s2", "priceName": "100元票价打5折", "price": "100", "salePrice": "50"},
+        # 双人套票：总价口径，不应进入
+        {"skuId": "s3", "priceName": "双人套票", "price": "200"},
+        # 低价正价票（对区不对号）：必须保留
+        {"skuId": "s4", "priceName": "50元(二层两侧座位对区不对号)", "price": "50"},
+        {"skuId": "s5", "priceName": "280元", "price": "280"},
+    ]
+    session = _session_from_perform_view(pv, skus)
+    prices = [t["price"] for t in session["ticket_tiers"]]
+    # 保留顺序为 sku 顺序：100(正价)、50(低价正价)、280(正价)
+    assert prices == [100.0, 50.0, 280.0]

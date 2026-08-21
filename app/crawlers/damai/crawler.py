@@ -61,6 +61,9 @@ _DAMAI_MERCHANDISE_TITLE_MARKERS = (
     "周边商品",
 )
 
+# 大麦主题频道分类（官网首页导航实测）：必须走 tn 参数，放 ctl 无效返回空。
+_DAMAI_THEME_CATEGORIES = frozenset(("儿童亲子", "二次元", "旅游展览"))
+
 
 class _SearchAjaxError(RuntimeError):
     """searchajax transport or response-format failure."""
@@ -613,14 +616,26 @@ class DamaiCrawler(BaseCrawler):
                 return url
         return None
 
+    @staticmethod
+    def _category_params(category: str) -> tuple[str, str]:
+        """大麦分类分两类：ctl=演出类目（演唱会/话剧歌剧…），tn=主题频道（儿童亲子/二次元…）。
+
+        官网首页导航实测：主题频道放 ctl 无效（接口返回空数据），必须走 tn。
+        """
+        category = (category or "").strip()
+        if category in _DAMAI_THEME_CATEGORIES:
+            return "", category
+        return category, ""
+
     def _build_search_url(
         self, city: str, keyword: str, page_no: int, category: str = ""
     ) -> str:
         base = self.config.sources.damai.search_url or "https://search.damai.cn/search.htm"
+        ctl, tn = self._category_params(category)
         params: dict[str, str] = {
             "order": "1",
             "cty": city or "",
-            "ctl": category or "",
+            "ctl": ctl,
             "currPage": str(page_no),
         }
         if keyword:
@@ -628,15 +643,18 @@ class DamaiCrawler(BaseCrawler):
         else:
             # 与线上 MCP 验证一致：空关键词 + order=1 可拉全部分类
             params["keyword"] = ""
+        if tn:
+            params["tn"] = tn
         return f"{base}?{urlencode(params, quote_via=quote)}"
 
     def _build_ajax_url(
         self, city: str, keyword: str, page_no: int, category: str = ""
     ) -> str:
+        ctl, tn = self._category_params(category)
         params = {
             "keyword": keyword or "",
             "cty": city or "",
-            "ctl": category or "",
+            "ctl": ctl,
             "sctl": "",
             "tsg": "0",
             "st": "",
@@ -644,7 +662,7 @@ class DamaiCrawler(BaseCrawler):
             "order": "1",
             "pageSize": "30",
             "currPage": str(page_no),
-            "tn": "",
+            "tn": tn,
         }
         return f"{SEARCH_AJAX_URL}?{urlencode(params, quote_via=quote)}"
 
@@ -668,10 +686,39 @@ class DamaiCrawler(BaseCrawler):
         records = self._extract_records(data)
         items: list[RawShowItem] = []
         for rec in records:
+            # 搜索接口的推荐位/热门位会混入跨城项目（如详情页「为你推荐」的
+            # 外地相声社），记录自带城市与请求城市不一致时直接丢弃。
+            if not self._city_matches(rec, city):
+                self.log.info(
+                    "damai skip cross-city item=%s city=%r requested=%r",
+                    str(rec.get("projectId") or rec.get("id") or "-"),
+                    str(
+                        rec.get("cityname")
+                        or rec.get("cityName")
+                        or rec.get("city")
+                        or ""
+                    ),
+                    city,
+                )
+                continue
             item = self._record_to_raw(rec, city=city, from_api=True)
             if item:
                 items.append(item)
         return items
+
+    @staticmethod
+    def _city_matches(rec: dict[str, Any], requested: str) -> bool:
+        """记录自带城市与请求城市是否一致；记录无城市信息时不拦截。"""
+        record_city = clean_text(
+            str(rec.get("cityname") or rec.get("cityName") or rec.get("city") or "")
+        )
+        if not record_city:
+            return True
+
+        def norm(name: str) -> str:
+            return name.strip().removesuffix("市").removesuffix("省").strip()
+
+        return norm(record_city) == norm(requested)
 
     def _extract_records(self, data: Any) -> list[dict[str, Any]]:
         """从各种大麦响应结构里抠出项目列表。"""
