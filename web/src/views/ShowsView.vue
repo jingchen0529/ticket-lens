@@ -56,7 +56,7 @@ import SingleDeleteModal from '@/components/custom/SingleDeleteModal.vue'
 import ImagePreviewModal from '@/components/custom/ImagePreviewModal.vue'
 
 // 平台中文映射（对应后端枚举）
-const SOURCE_LABELS = { damai: '大麦网', maoyan: '猫眼' }
+const SOURCE_LABELS = { damai: '大麦网', maoyan: '猫眼', showstart: '秀动' }
 
 // 状态筛选 = 演出状态（与表格「状态」列同口径，按演出时间与今天比较），
 // 固定四态，后端 /shows 以 perf_state 参数过滤。
@@ -592,9 +592,9 @@ const citySelectDropdownRef = ref(null)
 const isCityDropdownOpen = ref(false)
 const cityFuzzySearch = ref('')
 
-// 平台下拉列表（默认固定包含大麦网与猫眼，即使数据库暂无猫眼数据也全量呈现）
+// 平台下拉列表（默认固定包含大麦网、猫眼与秀动，即使数据库暂无数据也全量呈现）
 const platformOptions = computed(() => {
-  const defaults = ['damai', 'maoyan']
+  const defaults = ['damai', 'maoyan', 'showstart']
   const dbSources = facetOptions.value.source || []
   const set = new Set([...defaults, ...dbSources])
   return Array.from(set)

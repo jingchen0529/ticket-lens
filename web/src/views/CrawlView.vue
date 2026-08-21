@@ -18,8 +18,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 
-// 1. 目标平台 (目前仅开放大麦网)
-const selectedPlatforms = ref(['damai', 'maoyan'])
+// 1. 目标平台
+const selectedPlatforms = ref(['damai', 'maoyan', 'showstart'])
 const selectedPlatformTab = ref('all')
 const damaiCategories = [
   '曲苑杂坛',
@@ -52,6 +52,32 @@ const maoyanCategories = [
   '其他'
 ]
 const selectedMaoyanCategory = ref('all')
+const showstartCategories = [
+  '民谣',
+  '摇滚',
+  '流行',
+  '电子',
+  '轻音乐',
+  'HipHop',
+  '古典',
+  '世界音乐',
+  '节奏布鲁斯',
+  '爵士',
+  '动漫',
+  '金属',
+  '布鲁斯',
+  '灵魂乐',
+  '乡村乐',
+  '雷鬼',
+  '实验',
+  '话剧歌剧',
+  '朋克',
+  '极端金属',
+  '核',
+  '独立',
+  '放克'
+]
+const selectedShowstartCategory = ref('all')
 
 const damaiCategoryValue = computed(() =>
   selectedDamaiCategory.value === 'all' ? '' : selectedDamaiCategory.value
@@ -61,10 +87,14 @@ const maoyanCategoryValue = computed(() =>
   selectedMaoyanCategory.value === 'all' ? '' : selectedMaoyanCategory.value
 )
 
+const showstartCategoryValue = computed(() =>
+  selectedShowstartCategory.value === 'all' ? '' : selectedShowstartCategory.value
+)
+
 function setPlatformTab(tab) {
   if (tab === 'all') {
     selectedPlatformTab.value = tab
-    selectedPlatforms.value = ['damai', 'maoyan']
+    selectedPlatforms.value = ['damai', 'maoyan', 'showstart']
   } else if (tab === 'damai') {
     selectedPlatformTab.value = tab
     selectedPlatforms.value = ['damai']
@@ -74,7 +104,6 @@ function setPlatformTab(tab) {
   } else if (tab === 'showstart') {
     selectedPlatformTab.value = tab
     selectedPlatforms.value = ['showstart']
-    toast.warn('秀动 ShowStart 平台数据采集功能正在开发中，暂未开放')
   } else {
     selectedPlatformTab.value = tab
     selectedPlatforms.value = ['damai']
@@ -687,7 +716,9 @@ async function startCrawl() {
         ? damaiCategoryValue.value
         : selectedPlatformTab.value === 'maoyan'
           ? maoyanCategoryValue.value
-          : '',
+          : selectedPlatformTab.value === 'showstart'
+            ? showstartCategoryValue.value
+            : '',
       max_pages: maxPages,
       headed: true
     })
@@ -699,7 +730,9 @@ async function startCrawl() {
       ? ` · 大麦${damaiCategoryValue.value || '全部分类'}`
       : selectedPlatformTab.value === 'maoyan'
         ? ` · 猫眼${maoyanCategoryValue.value || '全部分类'}`
-        : ''
+        : selectedPlatformTab.value === 'showstart'
+          ? ` · 秀动${showstartCategoryValue.value || '全部分类'}`
+          : ''
     toast.success(`已启动采集（${hint}${categoryHint} · 最多 ${maxPages || '全部'} 页/城）`)
     await refreshJobs()
   } catch (e) {
@@ -872,7 +905,7 @@ defineExpose({
             {{ isCrawling ? '演艺数据实时采集任务执行中' : '数据采集系统正处于就绪状态' }}
           </h1>
           <p class="text-xs md:text-sm text-white/85 mt-2 leading-relaxed font-normal">
-            本模块支持实时采集大麦网等平台全国范围的演出、演艺数据，集成智能代理分发、失败自动重试及第三方验证码自主识别策略。
+            本模块支持实时采集大麦网、猫眼、秀动等平台全国范围的演出、演艺数据，集成智能代理分发、失败自动重试及第三方验证码自主识别策略。
           </p>
         </div>
 
@@ -1017,12 +1050,32 @@ defineExpose({
               </Button>
             </div>
 
-            <div v-if="selectedPlatformTab === 'showstart'" class="mt-4 p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs text-slate-500 flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-                <span class="font-medium">秀动 ShowStart 平台采集接口正在适配中，暂未开放。</span>
+            <div v-if="selectedPlatformTab === 'showstart'" class="mt-4 flex items-start gap-3">
+              <span class="text-xs font-bold text-slate-500 shrink-0 leading-8">分类：</span>
+              <div class="flex flex-wrap items-center gap-x-1.5 gap-y-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  class="h-8 px-3 text-xs font-semibold transition-colors cursor-pointer"
+                  :class="selectedShowstartCategory === 'all' ? 'text-white' : 'text-slate-700 hover:bg-slate-100'"
+                  :style="selectedShowstartCategory === 'all' ? { backgroundColor: 'var(--primary)' } : {}"
+                  @click="selectedShowstartCategory = 'all'"
+                >
+                  全部
+                </Button>
+                <Button
+                  v-for="category in showstartCategories"
+                  :key="category"
+                  type="button"
+                  variant="ghost"
+                  class="h-8 px-3 text-xs font-semibold transition-colors cursor-pointer"
+                  :class="selectedShowstartCategory === category ? 'text-white' : 'text-slate-700 hover:bg-slate-100'"
+                  :style="selectedShowstartCategory === category ? { backgroundColor: 'var(--primary)' } : {}"
+                  @click="selectedShowstartCategory = category"
+                >
+                  {{ category }}
+                </Button>
               </div>
-              <span class="text-[11px] font-semibold text-slate-400 px-2 py-0.5 rounded bg-slate-200/60">暂未开放</span>
             </div>
 
             <div v-if="selectedPlatformTab === 'damai'" class="mt-4 flex items-start gap-3">
