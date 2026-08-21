@@ -57,9 +57,13 @@ def _parse_dt(value: Any) -> datetime | None:
 
 
 def _norm_title(title: str) -> str:
-    """规范剧目名称：取原名称里第一处《…》，无书名号则留空待人工规范。"""
-    m = _TITLE_RE.search(title or "")
-    return m.group(0) if m else ""
+    """规范剧目名称：保留原名称里所有《…》剧目名（多剧目连演，如相声/曲艺）。
+
+    客户口径：原名称里有多个书名号剧目时全部保留，不要只留第一个；
+    无书名号则留空待人工规范。
+    """
+    found = _TITLE_RE.findall(title or "")
+    return "".join(found) if found else ""
 
 
 def _fmt_price(val: Any) -> str:
