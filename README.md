@@ -1,6 +1,6 @@
 # ticket-lens（daxi）
 
-大麦 / 猫眼 **演出数据采集平台**。桌面客户端形态：Tauri 壳 + Vue 3 前端 + FastAPI 后端（PyInstaller 打包）+ Playwright 真实浏览器采集。
+大麦 / 猫眼 / 秀动 **演出数据采集平台**。桌面客户端形态：Tauri 壳 + Vue 3 前端 + FastAPI 后端（PyInstaller 打包）；大麦、猫眼使用 Playwright，秀动使用签名 HTTP API。
 
 一个安装包装完即用，客户在界面上点「开始采集」，遇到验证码弹出真实浏览器窗口手动拖滑块，数据落本地 SQLite，可在界面查询、导出 CSV / Excel。
 
@@ -34,6 +34,7 @@
     routers/          shows.py 查询导出 / crawl.py 触发采集 / settings.py 前端设置
     crawlers/damai/   大麦采集 + 阿里 x5、baxia、水果滑块过码
     crawlers/maoyan/  猫眼采集 + 美团 Yoda 过码
+    crawlers/showstart/ 秀动签名 HTTP API 采集（无浏览器/验证码）
     pipeline/         RawShowItem → 统一 Show 规范化
     services/         crawl.py 可编程采集入口 / crawl_jobs.py 进程内任务管理 / export.py
     core/paths.py     跨平台路径解析（打包后 data 目录、随包 Chromium）
@@ -81,7 +82,8 @@ pytest
 daxi show-config                                    # 看当前生效配置
 daxi crawl -s damai -c 北京 -c 上海 -p 1 --headed -v  # 有头，方便手动过码
 daxi crawl -s maoyan -c 成都 -p 2 --backend sqlite
-daxi crawl                                          # 按配置文件默认城市抓两个源
+daxi crawl -s showstart -c 北京 -p 1
+daxi crawl                                          # 按配置文件默认城市抓三个源
 ```
 
 可选环境变量：
@@ -115,7 +117,7 @@ export DAXI_CAPTCHA_PASSWORD=...
 
 提交单平台任务时可传 `category`：大麦任务将其作为搜索接口的一级分类 `ctl`，
 猫眼任务将分类名映射为列表接口的 `categoryId`。空字符串或不传表示全部分类；
-同时采集大麦和猫眼时不显示或应用分类筛选。
+秀动任务将分类名映射为 `showStyle`。同时采集多个平台时不显示或应用分类筛选。
 
 ## 数据
 
@@ -152,9 +154,12 @@ runner（每个源独立 BrowserSession + cookie）
     │     crawler.py      # 采集
     │     captcha.py      # 阿里 x5 / baxia / 滑块自动过验证
     │
-    └─ crawlers/maoyan/
+    ├─ crawlers/maoyan/
           crawler.py      # 采集
           captcha.py      # 美团 Yoda / 滑块自动过验证
+    └─ crawlers/showstart/
+          client.py       # 签名 HTTP API
+          crawler.py      # 采集（无浏览器/验证码）
                 │
                 ▼
           RawShowItem[] → pipeline.normalize → Show[] → storage
@@ -162,13 +167,13 @@ runner（每个源独立 BrowserSession + cookie）
 
 ### 策略差异
 
-| | 大麦 | 猫眼 |
-|---|---|---|
-| 目录 | `crawlers/damai/` | `crawlers/maoyan/` |
-| 入口 | `search.damai.cn` | `show.maoyan.com` SPA |
-| 验证码 | 阿里 x5 / punish / NC 滑块 | 美团 Yoda / 滑块 |
-| 自动过验证 | 拟人轨迹滑块 + 可选打码 API | 同左，选择器不同 |
-| Cookie | `data/cookies/damai_storage.json` | `data/cookies/maoyan_storage.json` |
+| | 大麦 | 猫眼 | 秀动 |
+|---|---|---|---|
+| 目录 | `crawlers/damai/` | `crawlers/maoyan/` | `crawlers/showstart/` |
+| 入口 | `search.damai.cn` | `show.maoyan.com` SPA | 签名 HTTP API |
+| 验证码 | 阿里 x5 / punish / NC 滑块 | 美团 Yoda / 滑块 | 无 |
+| 自动过验证 | 拟人轨迹滑块 + 可选打码 API | 同左，选择器不同 | 不需要 |
+| Cookie | `data/cookies/damai_storage.json` | `data/cookies/maoyan_storage.json` | 无持久 cookie |
 
 两套策略输出同一 `RawShowItem`，再经 `pipeline` 变成统一 `Show`。
 
@@ -251,7 +256,7 @@ python tools/dev/render_captcha_probe.py \
 | 字段 | 说明 |
 |---|---|
 | `id` | `{source}:{source_id}` |
-| `source` | `damai` / `maoyan` |
+| `source` | `damai` / `maoyan` / `showstart` |
 | `title` / `category` / `artists` | 标题、分类、艺人 |
 | `venue` | `name` / `city` / `address` |
 | `price` | `min_price` / `max_price` / `raw` |
